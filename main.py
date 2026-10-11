@@ -1,9 +1,12 @@
 import asyncio
+import os
 from brain import Brain
 
-TOKEN = "8993624686:AAFKzow0S_fgdU6mHxBEU-JgeTp_ia1GIA0"
+TOKEN = os.getenv("BOT_TOKEN")
 
 async def main():
+    if not TOKEN:
+        raise RuntimeError("❌ Не задан BOT_TOKEN в переменных окружения")
     brain = Brain(TOKEN)
     await brain.start()
 

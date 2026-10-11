@@ -1,11 +1,11 @@
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+import os
 
 
 ADMIN_IDS = [
-    5998092433,
-    5364546094,
+    int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()
 ]
 
 
