@@ -1,27 +1,41 @@
 import sqlite3
 import random
 import time
+import json
 
 
 class DB:
-    # ---------- КОНСТАНТЫ КАЗИНО ----------
-    CASINO_INCOME = {
-        1: 30, 2: 80, 3: 200, 4: 500, 5: 1200,
-        6: 3000, 7: 8000, 8: 20000, 9: 50000, 10: 130000,
+    # ===== ПОМЕЩЕНИЯ =====
+    ROOMS = {
+        1:  {"name": "🎰 Слот-зал",       "income": 30,     "cost": 0,        "req": 0,  "desc": "Классические автоматы"},
+        2:  {"name": "🃏 Покерный зал",   "income": 80,     "cost": 1000,     "req": 1,  "desc": "Столы для покера"},
+        3:  {"name": "🎡 Рулетка",        "income": 200,    "cost": 2500,     "req": 3,  "desc": "Колесо фортуны"},
+        4:  {"name": "🍸 Бар",            "income": 500,    "cost": 6000,     "req": 5,  "desc": "Напитки и закуски"},
+        5:  {"name": "🎲 VIP-зал",        "income": 1200,   "cost": 15000,    "req": 8,  "desc": "Для крупных игроков"},
+        6:  {"name": "🏨 Отель",          "income": 3000,   "cost": 40000,    "req": 12, "desc": "Гости казино"},
+        7:  {"name": "🎭 Шоу-программа",  "income": 8000,   "cost": 100000,   "req": 16, "desc": "Развлечения каждый вечер"},
+        8:  {"name": "🌐 Онлайн-казино",  "income": 20000,  "cost": 250000,   "req": 22, "desc": "Игроки со всего мира"},
+        9:  {"name": "🚁 VIP-вертолётка", "income": 50000,  "cost": 600000,   "req": 30, "desc": "Только для элиты"},
+        10: {"name": "👑 Империя",        "income": 130000, "cost": 1500000,  "req": 40, "desc": "Легендарный бизнес"},
     }
-    CASINO_UPGRADE_COST = {
-        1: 1000, 2: 2500, 3: 6000, 4: 15000, 5: 40000,
-        6: 100000, 7: 250000, 8: 600000, 9: 1500000,
-    }
-    CASINO_USER_REQ = {
-        1: 0, 2: 1, 3: 3, 4: 5, 5: 8,
-        6: 12, 7: 16, 8: 22, 9: 30, 10: 40,
-    }
-    CASINO_MAX_HOURS = 8
-    CASINO_MAX_LEVEL = 10
 
+    # ===== СОТРУДНИКИ =====
+    STAFF = {
+        1: {"name": "🎩 Крупье",   "bonus": 0.10, "cost": 2000,   "desc": "+10% к доходу"},
+        2: {"name": "🍺 Бармен",   "bonus": 0.15, "cost": 8000,   "desc": "+15% к доходу"},
+        3: {"name": "💪 Охрана",   "bonus": 0.00, "cost": 25000,  "desc": "Защита от ограблений"},
+        4: {"name": "📊 Менеджер", "bonus": 0.25, "cost": 100000, "desc": "+25% к доходу"},
+        5: {"name": "📣 Пиарщик",  "bonus": 0.50, "cost": 500000, "desc": "+50% к доходу"},
+    }
+
+    CASINO_MAX_HOURS = 8
     SHOP_REFRESH_SECONDS = 6 * 3600
     SHOP_PER_CATEGORY = 3
+
+    # События
+    EVENT_COOLDOWN = 3600      # раз в час
+    EVENT_CHANCE = 0.5         # шанс 50%
+    EVENT_DURATION = 1800      # событие живёт 30 минут
 
     def __init__(self):
         self.conn = sqlite3.connect("casino.db")
@@ -74,9 +88,27 @@ class DB:
             CREATE TABLE IF NOT EXISTS casinos (
                 user_id INTEGER PRIMARY KEY,
                 name TEXT DEFAULT 'Моё казино',
-                level INTEGER DEFAULT 1,
                 last_collect INTEGER DEFAULT 0,
-                total_earned INTEGER DEFAULT 0
+                total_earned INTEGER DEFAULT 0,
+                pending_event TEXT DEFAULT NULL,
+                event_expires INTEGER DEFAULT 0,
+                last_event INTEGER DEFAULT 0
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS casino_rooms (
+                user_id INTEGER,
+                room_id INTEGER,
+                opened_at INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, room_id)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS casino_staff (
+                user_id INTEGER,
+                staff_id INTEGER,
+                hired_at INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, staff_id)
             )
         """)
         self._migrate()
@@ -86,7 +118,7 @@ class DB:
     def _migrate(self):
         cur = self.conn.execute("PRAGMA table_info(users)")
         existing_cols = {row[1] for row in cur.fetchall()}
-        needed = {
+        needed_users = {
             "username":     "TEXT",
             "sc":           "INTEGER DEFAULT 0",
             "lc":           "INTEGER DEFAULT 15",
@@ -99,9 +131,21 @@ class DB:
             "layout":       "TEXT DEFAULT 'classic'",
             "title":        "TEXT DEFAULT '🎲 Новичок'",
         }
-        for col, definition in needed.items():
+        for col, definition in needed_users.items():
             if col not in existing_cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+
+        cur = self.conn.execute("PRAGMA table_info(casinos)")
+        casino_cols = {row[1] for row in cur.fetchall()}
+        needed_casino = {
+            "pending_event": "TEXT DEFAULT NULL",
+            "event_expires": "INTEGER DEFAULT 0",
+            "last_event":    "INTEGER DEFAULT 0",
+            "total_earned":  "INTEGER DEFAULT 0",
+        }
+        for col, definition in needed_casino.items():
+            if col not in casino_cols:
+                self.conn.execute(f"ALTER TABLE casinos ADD COLUMN {col} {definition}")
 
     def _init_items(self):
         default_items = [
@@ -130,7 +174,7 @@ class DB:
         self.conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         self.conn.commit()
 
-    # ---------- ЮЗЕР ----------
+    # ================= ЮЗЕР =================
 
     def set_username(self, user_id, username):
         self._ensure(user_id)
@@ -184,7 +228,7 @@ class DB:
             "level": level, "xp": xp, "layout": layout, "title": title
         }
 
-    # ---------- УРОВНИ / XP ----------
+    # ================= УРОВНИ/XP =================
 
     def get_last_free_lc(self, user_id):
         self._ensure(user_id)
@@ -224,7 +268,7 @@ class DB:
         self.conn.execute("UPDATE users SET xp=? WHERE user_id=?", (xp, user_id))
         self.conn.commit()
 
-    # ---------- НАСТРОЙКИ ----------
+    # ================= НАСТРОЙКИ =================
 
     def get_layout(self, user_id):
         self._ensure(user_id)
@@ -246,7 +290,7 @@ class DB:
         self.conn.execute("UPDATE users SET title=? WHERE user_id=?", (title, user_id))
         self.conn.commit()
 
-    # ---------- ЛИДЕРБОРД ----------
+    # ================= ЛИДЕРБОРД =================
 
     def top_by(self, field, limit=10):
         allowed = {"sc", "lc", "level", "wins", "games"}
@@ -266,8 +310,6 @@ class DB:
         )
         return cur.fetchall()
 
-    # ---------- СТАТИСТИКА ДЛЯ АДМИНА ----------
-
     def get_bot_stats(self):
         cur = self.conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(sc),0), COALESCE(SUM(lc),0), COALESCE(SUM(games),0) "
@@ -276,7 +318,7 @@ class DB:
         users, sc, lc, games = cur.fetchone()
         return {"users": users, "sc": sc, "lc": lc, "games": games}
 
-    # ---------- МАГАЗИН ----------
+    # ================= МАГАЗИН =================
 
     def get_all_items(self, category=None):
         if category:
@@ -348,53 +390,38 @@ class DB:
         item = self.get_item(item_id)
         if not item:
             return False, "❌ Предмет не найден"
-
         sc = self.get_balance(user_id, "sc")
         if sc < item["price_sc"]:
             return False, f"❌ Нужно {item['price_sc']} SC, у тебя {sc}"
-
         if self.has_item(user_id, item_id) > 0:
             return False, "❌ У тебя уже есть этот предмет"
-
         self.add_balance(user_id, "sc", -item["price_sc"])
         self.add_item(user_id, item_id, 1)
-
         if item["category"] == "title":
             self.set_title(user_id, item["name"])
-
         return True, f"✅ Куплено: {item['name']} за {item['price_sc']} SC"
-
-    # ---------- РОТАЦИЯ МАГАЗИНА ----------
 
     def get_shop_items(self):
         now = int(time.time())
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
         next_refresh = cur.fetchone()[0]
-
         if now >= next_refresh:
             cur = self.conn.execute("SELECT DISTINCT category FROM items")
             categories = [r[0] for r in cur.fetchall()]
-
             selected = []
             for cat in categories:
-                cur = self.conn.execute(
-                    "SELECT item_id FROM items WHERE category=?",
-                    (cat,)
-                )
+                cur = self.conn.execute("SELECT item_id FROM items WHERE category=?", (cat,))
                 ids = [r[0] for r in cur.fetchall()]
                 random.shuffle(ids)
                 selected.extend(ids[:self.SHOP_PER_CATEGORY])
-
             self.conn.execute("DELETE FROM shop_stock")
             for iid in selected:
                 self.conn.execute("INSERT INTO shop_stock (item_id) VALUES (?)", (iid,))
-
             self.conn.execute(
                 "UPDATE shop_meta SET next_refresh=? WHERE id=1",
                 (now + self.SHOP_REFRESH_SECONDS,)
             )
             self.conn.commit()
-
         cur = self.conn.execute("""
             SELECT items.item_id, items.name, items.price_sc, items.rarity, items.category
             FROM shop_stock
@@ -407,29 +434,136 @@ class DB:
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
         return cur.fetchone()[0]
 
-    # ---------- СВОЁ КАЗИНО (TYCOON) ----------
+    # ================= КАЗИНО — ОСНОВА =================
 
     def get_casino(self, user_id):
         cur = self.conn.execute(
-            "SELECT user_id, name, level, last_collect, total_earned FROM casinos WHERE user_id=?",
+            "SELECT user_id, name, last_collect, total_earned, "
+            "pending_event, event_expires, last_event FROM casinos WHERE user_id=?",
             (user_id,)
         )
         row = cur.fetchone()
         if not row:
             return None
+        rooms = self.get_rooms(user_id)
+        level = max(rooms) if rooms else 1
         return {
-            "user_id": row[0], "name": row[1], "level": row[2],
-            "last_collect": row[3], "total_earned": row[4],
+            "user_id": row[0], "name": row[1], "last_collect": row[2],
+            "total_earned": row[3],
+            "pending_event": row[4], "event_expires": row[5], "last_event": row[6],
+            "level": level,
+            "rooms": rooms,
         }
 
     def create_casino(self, user_id):
         now = int(time.time())
         self.conn.execute(
-            "INSERT OR IGNORE INTO casinos (user_id, name, level, last_collect, total_earned) "
-            "VALUES (?, 'Моё казино', 1, ?, 0)",
-            (user_id, now)
+            "INSERT OR IGNORE INTO casinos (user_id, name, last_collect, total_earned, last_event) "
+            "VALUES (?, 'Моё казино', ?, 0, ?)",
+            (user_id, now, now)
         )
         self.conn.commit()
+        # Автоматически открываем 1-й зал
+        self.open_room(user_id, 1)
+
+    # ================= ПОМЕЩЕНИЯ =================
+
+    def get_rooms(self, user_id):
+        cur = self.conn.execute(
+            "SELECT room_id FROM casino_rooms WHERE user_id=? ORDER BY room_id", (user_id,)
+        )
+        return [row[0] for row in cur.fetchall()]
+
+    def open_room(self, user_id, room_id):
+        if room_id not in self.ROOMS:
+            return False, "❌ Неизвестное помещение"
+        if room_id in self.get_rooms(user_id):
+            return False, "❌ Помещение уже открыто"
+
+        room = self.ROOMS[room_id]
+        cost = room["cost"]
+        req = room["req"]
+
+        user_level, _ = self.get_level_xp(user_id)
+        if user_level < req:
+            return False, f"❌ Нужен юзер-уровень {req}, у тебя {user_level}"
+
+        lc = self.get_balance(user_id, "lc")
+        if lc < cost:
+            return False, f"❌ Нужно {cost} LC, у тебя {lc}"
+
+        # Проверка: нельзя открыть зал N, не открыв N-1
+        if room_id > 1 and (room_id - 1) not in self.get_rooms(user_id):
+            return False, f"❌ Сначала открой зал №{room_id - 1}"
+
+        # Собираем накопленное, чтобы не потерять
+        self.collect_casino(user_id)
+
+        self.add_balance(user_id, "lc", -cost)
+        self.conn.execute(
+            "INSERT INTO casino_rooms (user_id, room_id, opened_at) VALUES (?, ?, ?)",
+            (user_id, room_id, int(time.time()))
+        )
+        self.conn.commit()
+        return True, f"🏗 Открыт {room['name']}!"
+
+    # ================= СОТРУДНИКИ =================
+
+    def get_staff(self, user_id):
+        cur = self.conn.execute(
+            "SELECT staff_id FROM casino_staff WHERE user_id=?", (user_id,)
+        )
+        return [row[0] for row in cur.fetchall()]
+
+    def hire_staff(self, user_id, staff_id):
+        if staff_id not in self.STAFF:
+            return False, "❌ Неизвестный сотрудник"
+        if staff_id in self.get_staff(user_id):
+            return False, "❌ Уже нанят"
+        staff = self.STAFF[staff_id]
+        lc = self.get_balance(user_id, "lc")
+        if lc < staff["cost"]:
+            return False, f"❌ Нужно {staff['cost']} LC, у тебя {lc}"
+        self.collect_casino(user_id)
+        self.add_balance(user_id, "lc", -staff["cost"])
+        self.conn.execute(
+            "INSERT INTO casino_staff (user_id, staff_id, hired_at) VALUES (?, ?, ?)",
+            (user_id, staff_id, int(time.time()))
+        )
+        self.conn.commit()
+        return True, f"👔 Нанят {staff['name']}!"
+
+    def has_guard(self, user_id):
+        return 3 in self.get_staff(user_id)  # ID охраны = 3
+
+    # ================= ДОХОД =================
+
+    def get_income_per_hour(self, user_id):
+        """Базовый доход + бонусы от сотрудников."""
+        rooms = self.get_rooms(user_id)
+        base = sum(self.ROOMS[r]["income"] for r in rooms if r in self.ROOMS)
+
+        staff = self.get_staff(user_id)
+        bonus = sum(self.STAFF[s]["bonus"] for s in staff if s in self.STAFF)
+
+        return int(base * (1 + bonus))
+
+    def get_income_breakdown(self, user_id):
+        """Разбивка дохода: базовый, от залов, бонусы."""
+        rooms = self.get_rooms(user_id)
+        staff = self.get_staff(user_id)
+        base = sum(self.ROOMS[r]["income"] for r in rooms if r in self.ROOMS)
+        bonus_pct = sum(self.STAFF[s]["bonus"] for s in staff if s in self.STAFF)
+        bonus_lc = int(base * bonus_pct)
+        total = base + bonus_lc
+        return {
+            "base": base,
+            "bonus_pct": bonus_pct,
+            "bonus_lc": bonus_lc,
+            "total": total,
+            "rooms": [self.ROOMS[r] for r in rooms if r in self.ROOMS],
+            "staff": [self.STAFF[s] for s in staff if s in self.STAFF],
+        }
 
     def get_pending_income(self, user_id):
         casino = self.get_casino(user_id)
@@ -438,9 +572,9 @@ class DB:
         now = int(time.time())
         elapsed = now - casino["last_collect"]
         capped = min(elapsed, self.CASINO_MAX_HOURS * 3600)
-        income_per_hour = self.CASINO_INCOME.get(casino["level"], 0)
-        pending = int(income_per_hour * capped / 3600)
-        return pending, elapsed, income_per_hour
+        income = self.get_income_per_hour(user_id)
+        pending = int(income * capped / 3600)
+        return pending, elapsed, income
 
     def collect_casino(self, user_id):
         pending, _, _ = self.get_pending_income(user_id)
@@ -454,72 +588,200 @@ class DB:
         self.conn.commit()
         return pending
 
-    def upgrade_casino(self, user_id):
-        casino = self.get_casino(user_id)
-        if not casino:
-            return False, "❌ Сначала открой своё казино"
-
-        level = casino["level"]
-        if level >= self.CASINO_MAX_LEVEL:
-            return False, "👑 У тебя уже максимальный уровень!"
-
-        self.collect_casino(user_id)
-
-        cost = self.CASINO_UPGRADE_COST.get(level, 0)
-        next_level = level + 1
-        req_user_level = self.CASINO_USER_REQ.get(next_level, 999)
-
-        lc = self.get_balance(user_id, "lc")
-        if lc < cost:
-            return False, f"❌ Нужно {cost} LC, у тебя {lc}"
-
-        user_level, _ = self.get_level_xp(user_id)
-        if user_level < req_user_level:
-            return False, f"❌ Нужен юзер-уровень {req_user_level}, у тебя {user_level}"
-
-        self.add_balance(user_id, "lc", -cost)
-        self.conn.execute("UPDATE casinos SET level=? WHERE user_id=?", (next_level, user_id))
-        self.conn.commit()
-        return True, f"📈 Казино прокачано до уровня {next_level}!"
-
     def rename_casino(self, user_id, name):
         self.conn.execute("UPDATE casinos SET name=? WHERE user_id=?", (name, user_id))
         self.conn.commit()
 
-    def top_casinos(self, limit=10):
-        cur = self.conn.execute(
-            "SELECT casinos.user_id, users.username, users.title, "
-            "casinos.name, casinos.level, casinos.total_earned "
-            "FROM casinos JOIN users ON casinos.user_id = users.user_id "
-            "ORDER BY casinos.level DESC, casinos.total_earned DESC LIMIT ?",
-            (limit,)
+    # ================= СОБЫТИЯ =================
+
+    def try_trigger_event(self, user_id):
+        """Проверяет кулдаун и, если можно, генерирует событие.
+        Возвращает тип события или None."""
+        casino = self.get_casino(user_id)
+        if not casino:
+            return None
+        now = int(time.time())
+
+        # Если есть активное и не истекшее — возвращаем его
+        if casino["pending_event"] and casino["event_expires"] > now:
+            return casino["pending_event"]
+
+        # Если истекло — обнуляем
+        if casino["pending_event"] and casino["event_expires"] <= now:
+            self.conn.execute(
+                "UPDATE casinos SET pending_event=NULL, event_expires=0 WHERE user_id=?",
+                (user_id,)
+            )
+            self.conn.commit()
+
+        # Кулдаун
+        if now - casino["last_event"] < self.EVENT_COOLDOWN:
+            return None
+
+        # Шанс
+        if random.random() > self.EVENT_CHANCE:
+            # Просто обновляем last_event, чтоб не спамить
+            self.conn.execute("UPDATE casinos SET last_event=? WHERE user_id=?", (now, user_id))
+            self.conn.commit()
+            return None
+
+        # Генерируем событие
+        event_type = random.choices(
+            ["celebrity", "robbery", "big_visitor"],
+            weights=[50, 30, 20]
+        )[0]
+
+        self.conn.execute(
+            "UPDATE casinos SET pending_event=?, event_expires=?, last_event=? WHERE user_id=?",
+            (event_type, now + self.EVENT_DURATION, now, user_id)
         )
+        self.conn.commit()
+        return event_type
+
+    def resolve_event(self, user_id, event_type, action):
+        """Обрабатывает решение игрока по событию."""
+        casino = self.get_casino(user_id)
+        if not casino or casino["pending_event"] != event_type:
+            return False, "❌ Событие уже неактивно"
+
+        result = {"ok": True, "text": "", "amount": 0}
+
+        if event_type == "celebrity":
+            # Знаменитость: бонус ~5x часового дохода
+            income = self.get_income_per_hour(user_id)
+            bonus = income * 5
+            self.add_balance(user_id, "lc", bonus)
+            self.conn.execute(
+                "UPDATE casinos SET total_earned = total_earned + ? WHERE user_id=?",
+                (bonus, user_id)
+            )
+            result["text"] = f"🌟 Знаменитость оставила {bonus} LC чаевых!"
+            result["amount"] = bonus
+
+        elif event_type == "big_visitor":
+            # Крупный игрок: бонус ~10x часового дохода
+            income = self.get_income_per_hour(user_id)
+            bonus = income * 10
+            self.add_balance(user_id, "lc", bonus)
+            self.conn.execute(
+                "UPDATE casinos SET total_earned = total_earned + ? WHERE user_id=?",
+                (bonus, user_id)
+            )
+            result["text"] = f"🐋 Крупный игрок проиграл {bonus} LC!"
+            result["amount"] = bonus
+
+        elif event_type == "robbery":
+            pending, _, _ = self.get_pending_income(user_id)
+            steal_pct = 0.20  # базово крадут 20% накопленного
+
+            if self.has_guard(user_id):
+                # С охраной 85% шанс отбить
+                if random.random() < 0.85:
+                    result["text"] = "💪 Охрана отбила ограбление! Ничего не потеряно."
+                    result["amount"] = 0
+                else:
+                    stolen = max(1, int(pending * steal_pct))
+                    # Вычитаем из накопленного через last_collect сдвиг
+                    # Проще: сдвинуть last_collect на время, чтоб уменьшить pending
+                    # Но это сложно. Просто спишем с last_collect, чтобы pending стал меньше
+                    # Хак: увеличиваем last_collect на время, эквивалентное stolen/income
+                    income = max(1, self.get_income_per_hour(user_id))
+                    seconds_lost = int(stolen / income * 3600)
+                    self.conn.execute(
+                        "UPDATE casinos SET last_collect = last_collect + ? WHERE user_id=?",
+                        (seconds_lost, user_id)
+                    )
+                    result["text"] = f"😨 Воры всё же прорвались! Потеряно ~{stolen} LC."
+                    result["amount"] = -stolen
+            else:
+                # Без охраны 30% шанс отбить
+                if random.random() < 0.30:
+                    result["text"] = "🍀 Каким-то чудом отбил ограбление!"
+                    result["amount"] = 0
+                else:
+                    stolen = max(1, int(pending * steal_pct))
+                    income = max(1, self.get_income_per_hour(user_id))
+                    seconds_lost = int(stolen / income * 3600)
+                    self.conn.execute(
+                        "UPDATE casinos SET last_collect = last_collect + ? WHERE user_id=?",
+                        (seconds_lost, user_id)
+                    )
+                    result["text"] = (
+                        f"🚨 Ограбление! Потеряно ~{stolen} LC.\n"
+                        f"_Совет: найми 💪 Охрану, чтобы защититься._"
+                    )
+                    result["amount"] = -stolen
+
+        # Закрываем событие
+        self.conn.execute(
+            "UPDATE casinos SET pending_event=NULL, event_expires=0 WHERE user_id=?",
+            (user_id,)
+        )
+        self.conn.commit()
+        return True, result["text"]
+
+    def clear_event(self, user_id):
+        self.conn.execute(
+            "UPDATE casinos SET pending_event=NULL, event_expires=0 WHERE user_id=?",
+            (user_id,)
+        )
+        self.conn.commit()
+
+    # ================= ТОП КАЗИНО =================
+
+    def top_casinos(self, limit=10):
+        # Считаем уровень = max(room_id) из casino_rooms
+        cur = self.conn.execute("""
+            SELECT c.user_id, u.username, u.title, c.name, c.total_earned,
+                   COALESCE(MAX(r.room_id), 1) as level
+            FROM casinos c
+            JOIN users u ON c.user_id = u.user_id
+            LEFT JOIN casino_rooms r ON c.user_id = r.user_id
+            GROUP BY c.user_id
+            ORDER BY level DESC, c.total_earned DESC
+            LIMIT ?
+        """, (limit,))
         return cur.fetchall()
 
     def get_casino_rank(self, user_id):
-        """Возвращает место юзера в рейтинге казино."""
+        casino = self.get_casino(user_id)
+        if not casino:
+            return None
+        if casino["level"] <= 1 and casino["total_earned"] <= 0:
+            return None
         cur = self.conn.execute("""
-            SELECT COUNT(*) + 1 FROM casinos
-            WHERE level > (SELECT level FROM casinos WHERE user_id=?)
-               OR (level = (SELECT level FROM casinos WHERE user_id=?)
-                   AND total_earned > (SELECT total_earned FROM casinos WHERE user_id=?))
-        """, (user_id, user_id, user_id))
+            SELECT COUNT(*) + 1 FROM (
+                SELECT c.user_id,
+                       COALESCE(MAX(r.room_id), 1) as lvl,
+                       c.total_earned as earned
+                FROM casinos c
+                LEFT JOIN casino_rooms r ON c.user_id = r.user_id
+                GROUP BY c.user_id
+            )
+            WHERE lvl > ?
+               OR (lvl = ? AND earned > ?)
+        """, (casino["level"], casino["level"], casino["total_earned"]))
         return cur.fetchone()[0]
 
     def count_active_casinos(self):
-        """Сколько казино реально прокачано (не пустышки)."""
-        cur = self.conn.execute(
-            "SELECT COUNT(*) FROM casinos WHERE level > 1 OR total_earned > 0"
-        )
+        cur = self.conn.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT c.user_id,
+                       COALESCE(MAX(r.room_id), 1) as lvl,
+                       c.total_earned as earned
+                FROM casinos c
+                LEFT JOIN casino_rooms r ON c.user_id = r.user_id
+                GROUP BY c.user_id
+            )
+            WHERE lvl > 1 OR earned > 0
+        """)
         return cur.fetchone()[0]
 
     def count_all_casinos(self):
-        """Сколько всего казино создано."""
         cur = self.conn.execute("SELECT COUNT(*) FROM casinos")
         return cur.fetchone()[0]
 
     def get_user_casino_position(self, user_id, limit=10):
-        """Возвращает (место_в_рейтинге, входит_ли_в_топ). None если нет казино или пустышка."""
         rank = self.get_casino_rank(user_id)
         if rank is None:
             return None, False

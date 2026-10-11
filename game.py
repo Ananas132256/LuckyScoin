@@ -323,6 +323,7 @@ class Game:
                     f"🎉 **ВЫИГРЫШ!** {sparkles}\n\n"
                     f"{final_frame}",
                     parse_mode="Markdown"
+                    
                 )
                 await asyncio.sleep(0.3)
         else:

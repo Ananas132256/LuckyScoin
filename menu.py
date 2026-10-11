@@ -194,7 +194,7 @@ class Menu:
         casino = self.brain.db.get_casino(user_id)
         casino_block = ""
         if casino:
-            income = self.brain.db.CASINO_INCOME.get(casino["level"], 0)
+            income = self.brain.db.get_income_per_hour(user_id)
             pending, _, _ = self.brain.db.get_pending_income(user_id)
             casino_block = (
                 f"\n🏢 **{casino['name']}** (ур. {casino['level']})\n"
@@ -265,21 +265,21 @@ class Menu:
             lines.append(f"_Всего открыто: {total_all}_")
         else:
             medals = ["🥇", "🥈", "🥉"]
-            for i, (uid, uname, title, cname, level, earned) in enumerate(data, 1):
+            # data = (uid, uname, title, cname, earned, level)
+            for i, (uid, uname, title, cname, earned, level) in enumerate(data, 1):
                 medal = medals[i - 1] if i <= 3 else f"{i}."
                 name = f"@{uname}" if uname else f"ID {uid}"
-                # Показываем доход казино
-                income = self.brain.db.CASINO_INCOME.get(level, 0)
+                # Считаем реальный доход казино по его залам и сотрудникам
+                income = self.brain.db.get_income_per_hour(uid)
                 lines.append(
                     f"{medal} **{cname}** — ур. {level} ({income} LC/ч)\n"
                     f"    👤 {name} — 💼 {earned} LC"
                 )
-
             lines.append(
                 f"\n📊 Активных казино: **{total_active}** из {total_all}"
             )
 
-        # Если юзер не в топ-10, показываем его место
+        # Если юзер не в топ-10 — показываем его место
         rank, in_top = self.brain.db.get_user_casino_position(user_id, limit=10)
         if rank is not None and not in_top:
             casino = self.brain.db.get_casino(user_id)

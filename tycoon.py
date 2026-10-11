@@ -10,10 +10,8 @@ class TycoonStates(StatesGroup):
 
 
 MAX_HOURS = DB.CASINO_MAX_HOURS
-MAX_LEVEL = DB.CASINO_MAX_LEVEL
-INCOME = DB.CASINO_INCOME
-COST = DB.CASINO_UPGRADE_COST
-REQ = DB.CASINO_USER_REQ
+ROOMS = DB.ROOMS
+STAFF = DB.STAFF
 
 
 def fmt(seconds):
@@ -27,12 +25,16 @@ def fmt(seconds):
 
 
 def progress_bar(value, total, length=10):
-    """Рисует прогресс-бар ▰▰▰▱▱▱"""
     if total <= 0:
         return "▱" * length
     filled = int(value / total * length)
     filled = max(0, min(length, filled))
     return "▰" * filled + "▱" * (length - filled)
+
+
+def fmt_num(n):
+    """1200000 → 1 200 000"""
+    return f"{n:,}".replace(",", " ")
 
 
 class Tycoon:
@@ -42,10 +44,13 @@ class Tycoon:
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "casino")(self.cb_casino)
         dp.callback_query(F.data == "tycoon_collect")(self.cb_collect)
-        dp.callback_query(F.data == "tycoon_upgrade")(self.cb_upgrade)
+        dp.callback_query(F.data == "tycoon_rooms")(self.cb_rooms)
+        dp.callback_query(F.data.startswith("tycoon_open_"))(self.cb_open_room)
+        dp.callback_query(F.data == "tycoon_staff")(self.cb_staff)
+        dp.callback_query(F.data.startswith("tycoon_hire_"))(self.cb_hire_staff)
         dp.callback_query(F.data == "tycoon_rename")(self.cb_rename_start)
-        dp.callback_query(F.data == "tycoon_levels")(self.cb_levels)
         dp.callback_query(F.data == "tycoon_info")(self.cb_info)
+        dp.callback_query(F.data.startswith("tycoon_event_"))(self.cb_event)
         dp.message(TycoonStates.waiting_for_name)(self.on_name_input)
 
     # ---------- ОТКРЫТИЕ ----------
@@ -58,6 +63,11 @@ class Tycoon:
         if not casino:
             self.brain.db.create_casino(user_id)
             casino = self.brain.db.get_casino(user_id)
+
+        # Пробуем тригернуть событие
+        self.brain.db.try_trigger_event(user_id)
+        casino = self.brain.db.get_casino(user_id)
+
         await self._render_main(query, casino)
 
     # ---------- ГЛАВНЫЙ ЭКРАН ----------
@@ -65,13 +75,11 @@ class Tycoon:
     async def _render_main(self, query, casino):
         user_id = casino["user_id"]
         level = casino["level"]
-        income = INCOME.get(level, 0)
+        income = self.brain.db.get_income_per_hour(user_id)
         pending, elapsed, _ = self.brain.db.get_pending_income(user_id)
 
-        # Прогресс хранилища
         max_seconds = MAX_HOURS * 3600
         capped = min(elapsed, max_seconds)
-        max_pending = int(income * MAX_HOURS)
         bar = progress_bar(capped, max_seconds, 10)
         percent = int(capped / max_seconds * 100) if max_seconds else 0
 
@@ -85,58 +93,54 @@ class Tycoon:
             storage_line = f"📦 `{bar}` **{percent}%**"
             hint = "*Доход начнёт копиться сразу после открытия.*"
 
-        # Ранг
         rank = self.brain.db.get_casino_rank(user_id)
-
-        # Юзер-уровень
-        user_level, _ = self.brain.db.get_level_xp(user_id)
+        rank_str = f"#{rank}" if rank else "—"
 
         text = (
             f"🏢 **{casino['name']}**\n"
-            f"🏅 Место в рейтинге: **#{rank}**\n\n"
-            f"⭐ Уровень казино: **{level} / {MAX_LEVEL}**\n"
-            f"💵 Доход: **{income} LC/час**\n"
-            f"💼 Всего заработано: **{casino['total_earned']} LC**\n"
-            f"👤 Твой юзер-уровень: **{user_level}**\n\n"
-            f"💰 **Накоплено: {pending} LC**\n"
+            f"🏅 Место в рейтинге: **{rank_str}**\n\n"
+            f"⭐ Уровень: **{level} / 10**\n"
+            f"💵 Доход: **{fmt_num(income)} LC/час**\n"
+            f"💼 Всего заработано: **{fmt_num(casino['total_earned'])} LC**\n\n"
+            f"💰 **Накоплено: {fmt_num(pending)} LC**\n"
             f"{storage_line}\n"
             f"{hint}\n"
         )
 
-        # Что дальше
-        if level < MAX_LEVEL:
-            next_level = level + 1
-            next_income = INCOME.get(next_level, 0)
-            next_cost = COST.get(level, 0)
-            req_lvl = REQ.get(next_level, 999)
-            can_upgrade = (user_level >= req_lvl)
-            mark = "✅" if can_upgrade else "🔒"
-            text += (
-                f"\n📈 **Следующий уровень {next_level}:**\n"
-                f"  • Доход: {income} → **{next_income} LC/ч**\n"
-                f"  • Цена: **{next_cost} LC**\n"
-                f"  • Нужен юзер-уровень: {mark} **{req_lvl}**"
-            )
-        else:
-            text += "\n👑 **У тебя максимальный уровень казино!**"
+        # Событие
+        event = casino.get("pending_event")
+        event_block = ""
+        event_kb = []
+        if event:
+            if event == "celebrity":
+                event_block = "\n🌟 **ЗНАМЕНИТОСТЬ В КАЗИНО!**\n_Бонус ждёт — забери!_"
+                event_kb.append([InlineKeyboardButton(text="🌟 Забрать бонус", callback_data="tycoon_event_celebrity")])
+            elif event == "big_visitor":
+                event_block = "\n🐋 **Крупный игрок зашёл!**\n_Он проиграл кучу денег — забери!_"
+                event_kb.append([InlineKeyboardButton(text="🐋 Забрать выигрыш", callback_data="tycoon_event_big_visitor")])
+            elif event == "robbery":
+                event_block = "\n🚨 **ОГРАБЛЕНИЕ!**\n_Воры в казино! Отбить?_"
+                event_kb.append([InlineKeyboardButton(text="🛡 Отбить", callback_data="tycoon_event_robbery")])
 
-        # Кнопки
+        text += event_block
+
         buttons = []
         if pending > 0:
             buttons.append([InlineKeyboardButton(
-                text=f"💵 Собрать {pending} LC",
+                text=f"💵 Собрать {fmt_num(pending)} LC",
                 callback_data="tycoon_collect"
             )])
-        if level < MAX_LEVEL:
-            buttons.append([InlineKeyboardButton(
-                text=f"📈 Апгрейд до {level + 1} ({COST.get(level, 0)} LC)",
-                callback_data="tycoon_upgrade"
-            )])
+
+        buttons.extend(event_kb)
+
         buttons.append([
-            InlineKeyboardButton(text="📊 Уровни",  callback_data="tycoon_levels"),
-            InlineKeyboardButton(text="ℹ️ Инфо",    callback_data="tycoon_info"),
+            InlineKeyboardButton(text="🏗 Помещения", callback_data="tycoon_rooms"),
+            InlineKeyboardButton(text="👔 Сотрудники", callback_data="tycoon_staff"),
         ])
-        buttons.append([InlineKeyboardButton(text="✏️ Переименовать", callback_data="tycoon_rename")])
+        buttons.append([
+            InlineKeyboardButton(text="ℹ️ Инфо", callback_data="tycoon_info"),
+            InlineKeyboardButton(text="✏️ Имя", callback_data="tycoon_rename"),
+        ])
         buttons.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu")])
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -146,109 +150,149 @@ class Tycoon:
             pass
         await query.answer()
 
-    # ---------- КНОПКИ ----------
+    # ---------- СОБРАТЬ ----------
 
     async def cb_collect(self, query: CallbackQuery):
         user_id = query.from_user.id
         collected = self.brain.db.collect_casino(user_id)
         if collected > 0:
-            await query.answer(f"✅ Собрано {collected} LC!", show_alert=True)
+            await query.answer(f"✅ Собрано {fmt_num(collected)} LC!", show_alert=True)
         else:
-            await query.answer("Пока нечего собирать — подожди немножко.", show_alert=True)
+            await query.answer("Пока нечего собирать.", show_alert=True)
         casino = self.brain.db.get_casino(user_id)
         await self._render_main(query, casino)
 
-    async def cb_upgrade(self, query: CallbackQuery):
+    # ---------- ПОМЕЩЕНИЯ ----------
+
+    async def cb_rooms(self, query: CallbackQuery):
         user_id = query.from_user.id
-        old_casino = self.brain.db.get_casino(user_id)
-        old_level = old_casino["level"]
+        opened = self.brain.db.get_rooms(user_id)
+        user_level, _ = self.brain.db.get_level_xp(user_id)
+        lc = self.brain.db.get_balance(user_id, "lc")
 
-        ok, msg = self.brain.db.upgrade_casino(user_id)
-        await query.answer(msg, show_alert=True)
+        lines = [
+            "🏗 **Помещения казино**\n",
+            f"⭐ Твой юзер-уровень: {user_level}",
+            f"💰 LC: {fmt_num(lc)}\n",
+        ]
 
-        if ok:
-            casino = self.brain.db.get_casino(user_id)
-            new_level = casino["level"]
-            old_income = INCOME.get(old_level, 0)
-            new_income = INCOME.get(new_level, 0)
-
-            upgrade_text = (
-                f"🎉 **АПГРЕЙД УСПЕШЕН!**\n\n"
-                f"🏢 **{casino['name']}**\n"
-                f"⭐ Уровень: {old_level} → **{new_level}**\n"
-                f"💵 Доход: {old_income} → **{new_income} LC/ч**\n\n"
-                f"Теперь ты зарабатываешь больше!\n"
-                f"Не забудь собирать доход каждые {MAX_HOURS} ч."
+        buttons = []
+        for rid, room in ROOMS.items():
+            is_open = rid in opened
+            can_open = (
+                not is_open
+                and (rid == 1 or (rid - 1) in opened)
+                and user_level >= room["req"]
             )
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🏢 К казино", callback_data="casino")]
-            ])
-            try:
-                await query.message.edit_text(upgrade_text, reply_markup=kb, parse_mode="Markdown")
-            except Exception:
-                pass
-        else:
-            casino = self.brain.db.get_casino(user_id)
-            await self._render_main(query, casino)
 
-    async def cb_levels(self, query: CallbackQuery):
-        user_id = query.from_user.id
-        casino = self.brain.db.get_casino(user_id)
-        current = casino["level"] if casino else 0
+            if is_open:
+                mark = "✅"
+            elif can_open:
+                mark = "🔓"
+            else:
+                mark = "🔒"
 
-        lines = ["📊 **Таблица уровней казино**\n"]
-        lines.append("`Ур. │ Доход/ч  │ Апгрейд    │ Юзер`")
-        lines.append("`────┼──────────┼────────────┼─────`")
-        for lvl in range(1, MAX_LEVEL + 1):
-            income = INCOME.get(lvl, 0)
-            cost = COST.get(lvl, 0)
-            req = REQ.get(lvl, 0)
-            mark = "▶️" if lvl == current else "  "
-            cost_str = f"{cost:,}".replace(",", " ") if cost else "—"
-            lines.append(f"`{mark}{lvl:>2} │ {income:>7}  │ {cost_str:>10} │ {req:>3}`")
+            lines.append(
+                f"{mark} **{room['name']}** — {fmt_num(room['income'])} LC/ч\n"
+                f"    _{room['desc']}_ | req: ур.{room['req']}"
+            )
 
-        lines.append(f"\n▶️ — твой текущий уровень ({current})")
+            if can_open:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🏗 Открыть {room['name']} ({fmt_num(room['cost'])} LC)",
+                    callback_data=f"tycoon_open_{rid}"
+                )])
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]
-        ])
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="Markdown")
         except Exception:
             pass
         await query.answer()
 
-    async def cb_info(self, query: CallbackQuery):
-        text = (
-            "ℹ️ **Как работает своё казино**\n\n"
-            "**1. Доход копится сам**\n"
-            f"Твоё казино генерирует LC каждый час. Даже когда ты оффлайн.\n\n"
-            "**2. Хранилище ограничено**\n"
-            f"Максимум накапливается за **{MAX_HOURS} часов**. Дальше не растёт — надо заходить и собирать.\n\n"
-            "**3. Апгрейды**\n"
-            "Улучшаешь уровень → растёт доход в час. Требуются LC и достаточный юзер-уровень.\n\n"
-            "**4. Рейтинг**\n"
-            "Все казино соревнуются по уровню и общему заработку. Топ виден в лидерборде.\n\n"
-            "**5. Совет**\n"
-            "Заходи 2-3 раза в день, чтобы не терять доход от переполнения хранилища."
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]
-        ])
+    async def cb_open_room(self, query: CallbackQuery):
         try:
-            await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            rid = int(query.data.replace("tycoon_open_", ""))
+        except ValueError:
+            return await query.answer("❌ Ошибка", show_alert=True)
+
+        user_id = query.from_user.id
+        ok, msg = self.brain.db.open_room(user_id, rid)
+        await query.answer(msg, show_alert=True)
+
+        # После покупки — обновить экран помещений
+        if ok:
+            await self.cb_rooms(query)
+
+    # ---------- СОТРУДНИКИ ----------
+
+    async def cb_staff(self, query: CallbackQuery):
+        user_id = query.from_user.id
+        hired = self.brain.db.get_staff(user_id)
+        lc = self.brain.db.get_balance(user_id, "lc")
+
+        lines = [
+            "👔 **Сотрудники**\n",
+            f"💰 LC: {fmt_num(lc)}\n",
+        ]
+
+        buttons = []
+        for sid, s in STAFF.items():
+            is_hired = sid in hired
+            mark = "✅" if is_hired else "🆓"
+            lines.append(
+                f"{mark} **{s['name']}** — {s['desc']}\n"
+                f"    Цена: {fmt_num(s['cost'])} LC"
+            )
+            if not is_hired:
+                buttons.append([InlineKeyboardButton(
+                    text=f"👔 Нанять {s['name']} ({fmt_num(s['cost'])} LC)",
+                    callback_data=f"tycoon_hire_{sid}"
+                )])
+
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        try:
+            await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="Markdown")
         except Exception:
             pass
         await query.answer()
+
+    async def cb_hire_staff(self, query: CallbackQuery):
+        try:
+            sid = int(query.data.replace("tycoon_hire_", ""))
+        except ValueError:
+            return await query.answer("❌ Ошибка", show_alert=True)
+
+        user_id = query.from_user.id
+        ok, msg = self.brain.db.hire_staff(user_id, sid)
+        await query.answer(msg, show_alert=True)
+
+        if ok:
+            await self.cb_staff(query)
+
+    # ---------- СОБЫТИЯ ----------
+
+    async def cb_event(self, query: CallbackQuery):
+        event_type = query.data.replace("tycoon_event_", "")
+        user_id = query.from_user.id
+
+        ok, text = self.brain.db.resolve_event(user_id, event_type, "auto")
+        await query.answer(text, show_alert=True)
+
+        casino = self.brain.db.get_casino(user_id)
+        await self._render_main(query, casino)
+
+    # ---------- ПЕРЕИМЕНОВАНИЕ ----------
 
     async def cb_rename_start(self, query: CallbackQuery, state: FSMContext):
         await state.set_state(TycoonStates.waiting_for_name)
         casino = self.brain.db.get_casino(query.from_user.id)
         current = casino["name"] if casino else "Моё казино"
-
         text = (
             f"✏️ **Переименование казино**\n\n"
-            f"Текущее название: **{current}**\n\n"
+            f"Текущее: **{current}**\n\n"
             f"Отправь новое название (от 2 до 20 символов).\n"
             f"Чтобы отменить — `/cancel`."
         )
@@ -266,15 +310,44 @@ class Tycoon:
         if text.startswith("/"):
             await state.clear()
             return await message.answer("Ок, отменено.")
-
         if not (2 <= len(text) <= 20):
             return await message.answer("❌ Название должно быть от 2 до 20 символов.")
-
         user_id = message.from_user.id
         casino = self.brain.db.get_casino(user_id)
         if not casino:
             return await message.answer("❌ Сначала открой казино через меню.")
-
         self.brain.db.rename_casino(user_id, text)
         await state.clear()
         await message.answer(f"✅ Казино переименовано в «{text}»!")
+
+    # ---------- ИНФО ----------
+
+    async def cb_info(self, query: CallbackQuery):
+        user_id = query.from_user.id
+        breakdown = self.brain.db.get_income_breakdown(user_id)
+
+        text = (
+            "ℹ️ **Как работает твоё казино**\n\n"
+            "**1. Доход копится сам**\n"
+            f"Казино генерирует LC каждый час, пока ты оффлайн.\n\n"
+            "**2. Хранилище ограничено**\n"
+            f"Максимум за **{MAX_HOURS} часов**. Дальше не растёт.\n\n"
+            "**3. Помещения**\n"
+            "Открываешь залы → растёт доход в час. Каждый новый зал требует LC и юзер-уровень.\n\n"
+            "**4. Сотрудники**\n"
+            "Нанятые сотрудники дают бонус к общему доходу. Охрана защищает от ограблений.\n\n"
+            "**5. События**\n"
+            "Раз в час случайно заходят знаменитости (бонус) или воры (ограбление).\n\n"
+            f"**Сейчас у тебя:**\n"
+            f"• Доход с залов: {fmt_num(breakdown['base'])} LC/ч\n"
+            f"• Бонус сотрудников: +{int(breakdown['bonus_pct']*100)}% ({fmt_num(breakdown['bonus_lc'])} LC/ч)\n"
+            f"• Итого: **{fmt_num(breakdown['total'])} LC/ч**"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]
+        ])
+        try:
+            await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            pass
+        await query.answer()
