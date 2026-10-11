@@ -21,7 +21,7 @@ class DB:
     CASINO_MAX_LEVEL = 10
 
     SHOP_REFRESH_SECONDS = 6 * 3600
-    SHOP_PER_CATEGORY = 4
+    SHOP_PER_CATEGORY = 3
 
     def __init__(self):
         self.conn = sqlite3.connect("casino.db")

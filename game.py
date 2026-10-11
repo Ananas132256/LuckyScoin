@@ -46,12 +46,12 @@ class Game:
         self.symbols = {
             "7️⃣": {"weight": 1,   "pay": {3: 77,   4: 77,   5: 777},   "reroll": True},
             "🎲": {"weight": 0.5, "pay": {3: 100,  4: 100,  5: 1000},  "reroll": True},
-            "🍀": {"weight": 200,  "pay": {3: 10,   4: 10,   5: 100},   "reroll": True},
-            "💣": {"weight": 15,  "pay": {3: -0.5, 4: -0.5, 5: -0.99}, "reroll": True},
-            "🍎": {"weight": 225, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
-            "🍍": {"weight": 250, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
+            "🍀": {"weight": 200,  "pay": {3: 7.5,   4: 10,   5: 100},   "reroll": True},
+            "💣": {"weight": 15,  "pay": {3: -0.5, 4: -1, 5: -20}, "reroll": True},
+            "🍎": {"weight": 215, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
+            "🍍": {"weight": 250, "pay": {3: 1.5,    4: 3,    5: 15},    "reroll": False},
             "🍊": {"weight": 225, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
-            "🍋": {"weight": 225, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
+            "🍋": {"weight": 215, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
             "🪙": {"weight": 40,  "pay": {3: 5,    4: 5,    5: 50},    "reroll": False},
             "⚙️": {"weight": 9,   "pay": {3: "item", 4: "item", 5: "item"}, "reroll": True},
         }
@@ -128,47 +128,215 @@ class Game:
         except TelegramBadRequest:
             pass
 
+        # ---------- КОНФИГ АНИМАЦИИ ПО ТИПУ КРУТКИ ----------
+    SPIN_ANIM = {
+        "common": {
+            "spin_frames": 5,       # сколько кадров кручения
+            "spin_delay": 0.16,     # стартовая задержка кадра
+            "stop_delay": 0.45,     # задержка остановки каждого символа
+            "last_stop_delay": 0.75,
+            "fake_stops": 0,        # фейковые остановки
+            "label": "▶️",
+        },
+        "uncommon": {
+            "spin_frames": 6,
+            "spin_delay": 0.17,
+            "stop_delay": 0.5,
+            "last_stop_delay": 0.85,
+            "fake_stops": 1,
+            "label": "⚡",
+        },
+        "rare": {
+            "spin_frames": 8,
+            "spin_delay": 0.18,
+            "stop_delay": 0.55,
+            "last_stop_delay": 0.95,
+            "fake_stops": 2,
+            "label": "💫",
+        },
+        "ultra": {
+            "spin_frames": 10,
+            "spin_delay": 0.2,
+            "stop_delay": 0.6,
+            "last_stop_delay": 1.1,
+            "fake_stops": 3,
+            "label": "🔥",
+        },
+    }
+
+    def _frame(self, inner: str, header: str = "") -> str:
+        """Рисует рамку вокруг содержимого. inner — до 21 символа внутри."""
+        pad = 21 - len(inner)
+        if pad < 0:
+            pad = 0
+        inner_padded = inner + " " * pad
+        line = f"║ {inner_padded} ║"
+        top = "╔═══════════════════════╗"
+        bot = "╚═══════════════════════╝"
+        if header:
+            return f"{header}\n{top}\n{line}\n{bot}"
+        return f"{top}\n{line}\n{bot}"
+
     async def _animate_slots(self, message, name, bet):
-        empty = "⬜ | ⬜ | ⬜ | ⬜ | ⬜"
-        delay = 0.35
-        while True:
+        spin_key = None
+        # Определяем тип крутки по имени (можно было передать, но так совместимо)
+        for k, (n, *_rest) in self.spin_types.items():
+            if n == name:
+                spin_key = k
+                break
+        cfg = self.SPIN_ANIM.get(spin_key or "common", self.SPIN_ANIM["common"])
+
+        noise = ["🎰", "🍒", "🍋", "7️⃣", "🎲", "🍀", "⚙️", "🪙", "💎", "🔔"]
+
+        # -------- СТАДИЯ 1: ПОДГОТОВКА --------
+        await self._safe_edit(
+            message,
+            f"🎰 **{name} крутка**\n"
+            f"💰 Ставка: {bet} LC\n\n"
+            f"{cfg['label']} *Подготовка...*\n\n"
+            f"{self._frame('⬜ | ⬜ | ⬜ | ⬜ | ⬜')}",
+            parse_mode="Markdown"
+        )
+        await asyncio.sleep(0.4)
+
+        # -------- СТАДИЯ 2: КРУЧЕНИЕ --------
+        for i in range(cfg["spin_frames"]):
+            rnd = [random.choice(noise) for _ in range(5)]
+            line = " | ".join(rnd)
+            speed = ["▶️ ▶️ ▶️", "⏩ ⏩ ⏩", "⏩ ⏩", "▶️ ▶️ ▶️", "⏩ ⏩ ⏩"][i % 5]
             await self._safe_edit(
                 message,
-                f"🎰 **{name} крутка**\n\n"
+                f"🎰 **{name} крутка**\n"
                 f"💰 Ставка: {bet} LC\n\n"
-                f"Линия: {empty}\n\n🎲 Крутим...",
+                f"{cfg['label']} *Крутим...* {speed}\n\n"
+                f"{self._frame(line)}",
                 parse_mode="Markdown"
             )
-            await asyncio.sleep(0.4)
+            # Замедление к концу кручения
+            delay = cfg["spin_delay"] + i * 0.012
+            await asyncio.sleep(delay)
 
-            symbols = self._get_symbols()
-            need_reroll = self._needs_reroll(symbols)
+        # -------- СТАДИЯ 3: ГЕНЕРАЦИЯ РЕЗУЛЬТАТА --------
+        symbols = self._get_symbols()
+        need_reroll = self._needs_reroll(symbols)
 
-            shown = []
-            for s in symbols:
-                shown.append(s)
-                display = " | ".join(shown + ["⬜"] * (5 - len(shown)))
+         # -------- СТАДИЯ 4: ФЕЙКОВЫЕ ОСТАНОВКИ --------
+        for fake_i in range(cfg["fake_stops"]):
+            # Случайные символы — никакого hint
+            fake_line = " | ".join([random.choice(noise) for _ in range(5)])
+
+            await self._safe_edit(
+                message,
+                f"🎰 **{name} крутка**\n"
+                f"💰 Ставка: {bet} LC\n\n"
+                f"😮 *Остановка...* {cfg['label']}\n\n"
+                f"{self._frame(fake_line)}",
+                parse_mode="Markdown"
+            )
+            await asyncio.sleep(0.7)
+
+            # Резко снова крутим
+            for j in range(3):
+                rnd = [random.choice(noise) for _ in range(5)]
+                line = " | ".join(rnd)
                 await self._safe_edit(
                     message,
-                    f"🎰 **{name} крутка**\n\n"
+                    f"🎰 **{name} крутка**\n"
                     f"💰 Ставка: {bet} LC\n\n"
-                    f"Линия: {display}\n\n🎲 Крутим...",
+                    f"🌀 *Обманка! Ещё крутим...*\n\n"
+                    f"{self._frame(line)}",
                     parse_mode="Markdown"
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(0.15)
 
-            if need_reroll:
-                await asyncio.sleep(0.4)
+        # -------- СТАДИЯ 5: РЕАЛЬНАЯ ОСТАНОВКА ПО ОДНОМУ --------
+        shown = []
+        for idx, s in enumerate(symbols):
+            shown.append(s)
+            # Пустые слоты — показать ещё крутящиеся
+            rest = ["🌫️"] * (5 - len(shown))
+            display = " | ".join(shown + rest)
+            stop_sound = "💥" if idx == 4 else "🔔"
+            await self._safe_edit(
+                message,
+                f"🎰 **{name} крутка**\n"
+                f"💰 Ставка: {bet} LC\n\n"
+                f"{cfg['label']} *Остановка...* {stop_sound}\n\n"
+                f"{self._frame(display)}",
+                parse_mode="Markdown"
+            )
+            if idx == 4:
+                await asyncio.sleep(cfg["last_stop_delay"])
+            else:
+                await asyncio.sleep(cfg["stop_delay"])
+
+        # -------- СТАДИЯ 6: ОЦЕНКА РЕЗУЛЬТАТА --------
+        runs = _max_consecutive(symbols)
+        best_run = max(runs.values()) if runs else 0
+        best_sym = max(runs, key=runs.get) if runs else None
+
+        final_line = " | ".join(symbols)
+        final_frame = self._frame(final_line)
+
+        # Близкий промах — 2 одинаковых
+        near_miss = (best_run == 2 and best_sym in ("7️⃣", "🎲", "🍀", "💣", "💎"))
+
+        if near_miss:
+            await self._safe_edit(
+                message,
+                f"🎰 **{name} крутка**\n"
+                f"💰 Ставка: {bet} LC\n\n"
+                f"😱 **ОЙ, ЧУТЬ-ЧУТЬ!**\n\n"
+                f"{final_frame}\n"
+                f"_{best_sym} {best_sym} — нужен ещё один {best_sym}..._",
+                parse_mode="Markdown"
+            )
+            await asyncio.sleep(1.2)
+
+        # -------- СТАДИЯ 7: РЕРОЛЛ --------
+        if need_reroll:
+            await asyncio.sleep(0.3)
+            for i in range(4):
+                rnd = [random.choice(noise) for _ in range(5)]
+                line = " | ".join(rnd)
                 await self._safe_edit(
                     message,
-                    f"🎰 **{name} крутка**\n\n"
+                    f"🎰 **{name} крутка**\n"
                     f"💰 Ставка: {bet} LC\n\n"
-                    f"Линия: {empty}\n\n🔄 Реролл...",
+                    f"🔄 **РЕРОЛЛ!** Шанс на бонус...\n\n"
+                    f"{self._frame(line)}",
                     parse_mode="Markdown"
                 )
-                await asyncio.sleep(0.6)
-                continue
-            return symbols
+                await asyncio.sleep(0.22 - i * 0.02)
+
+            await asyncio.sleep(0.3)
+            return await self._animate_slots(message, name, bet)
+
+        # -------- СТАДИЯ 8: ФИНАЛЬНЫЙ ЭФФЕКТ --------
+        if best_run >= 3:
+            for i in range(3):
+                sparkles = ["✨ 🎉 ✨", "🎊 🏆 🎊", "💥 ✨ 💥"][i]
+                await self._safe_edit(
+                    message,
+                    f"🎰 **{name} крутка**\n"
+                    f"💰 Ставка: {bet} LC\n\n"
+                    f"🎉 **ВЫИГРЫШ!** {sparkles}\n\n"
+                    f"{final_frame}",
+                    parse_mode="Markdown"
+                )
+                await asyncio.sleep(0.3)
+        else:
+            await self._safe_edit(
+                message,
+                f"🎰 **{name} крутка**\n"
+                f"💰 Ставка: {bet} LC\n\n"
+                f"😔 *Нет тройки...*\n\n"
+                f"{final_frame}",
+                parse_mode="Markdown"
+            )
+            await asyncio.sleep(0.6)
+
+        return symbols
 
     # ---------- МЕНЮ ИГРЫ ----------
 
