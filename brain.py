@@ -7,6 +7,7 @@ from admin import Admin
 from shop import Shop
 from trade import Trade
 from tycoon import Tycoon
+from badges import Badges
 
 
 class Brain:
@@ -20,6 +21,7 @@ class Brain:
         self.shop = Shop(self)
         self.trade = Trade(self)
         self.tycoon = Tycoon(self)
+        self.badges = Badges(self)
 
     async def start(self):
         self.menu.register(self.dp)
@@ -28,4 +30,5 @@ class Brain:
         self.shop.register(self.dp)
         self.trade.register(self.dp)
         self.tycoon.register(self.dp)
+        self.badges.register(self.dp)
         await self.dp.start_polling(self.bot)
