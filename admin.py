@@ -1,16 +1,8 @@
-
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
-<<<<<<< HEAD
-from aiogram.types import Message
-
-
-# ⚠️ ВПИШИ СВОЙ TELEGRAM ID (узнать у @userinfobot)
-=======
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 
->>>>>>> 76f277e (<f>)
 ADMIN_IDS = [
     5998092433,
     5364546094,
@@ -34,24 +26,6 @@ class Admin:
         dp.message(Command("setxp"))(self.cmd_setxp)
         dp.message(Command("userinfo"))(self.cmd_userinfo)
 
-<<<<<<< HEAD
-    def _check(self, message: Message) -> bool:
-        return is_admin(message.from_user.id)
-
-    async def cmd_admin(self, message: Message):
-        if not self._check(message):
-            return
-        text = (
-            "🛠 **Админ-команды LuckyScoin:**\n\n"
-            "`/give <user_id> <sc|lc> <amount>` — выдать валюту\n"
-            "`/take <user_id> <sc|lc> <amount>` — забрать валюту\n"
-            "`/setbalance <user_id> <sc|lc> <amount>` — установить баланс\n"
-            "`/setlevel <user_id> <level>` — установить уровень\n"
-            "`/setxp <user_id> <xp>` — установить XP\n"
-            "`/userinfo <user_id>` — инфо о юзере"
-        )
-        await message.answer(text, parse_mode="Markdown")
-=======
         # инлайн-панель
         dp.callback_query(F.data == "admin_stats")(self.cb_stats)
         dp.callback_query(F.data == "admin_econ")(self.cb_econ)
@@ -138,7 +112,6 @@ class Admin:
         await query.answer()
 
     # ---------- СТАРЫЕ КОМАНДЫ (не трогаем) ----------
->>>>>>> 76f277e (<f>)
 
     def _parse_args(self, message: Message, expected: int):
         args = message.text.split()
@@ -264,12 +237,8 @@ class Admin:
 
         text = (
             f"👤 **Юзер** `{target_id}`\n"
-<<<<<<< HEAD
-            f"Ник: @{u['username']}\n\n"
-=======
             f"Ник: @{u['username']}\n"
             f"🏷 Титул: {u['title']}\n\n"
->>>>>>> 76f277e (<f>)
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
             f"💰 SC: {u['sc']}\n"
             f"🍀 LC: {u['lc']}\n\n"
