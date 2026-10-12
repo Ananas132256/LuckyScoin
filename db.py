@@ -120,6 +120,16 @@ class DB:
         self._init_items()
         self.conn.commit()
 
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER DEFAULT 0,
+                reason TEXT DEFAULT '',
+                started_at INTEGER DEFAULT 0
+            )
+        """)
+        self.conn.execute("INSERT OR IGNORE INTO maintenance (id, enabled) VALUES (1, 0)")
+
     def _migrate(self):
         cur = self.conn.execute("PRAGMA table_info(users)")
         existing_cols = {row[1] for row in cur.fetchall()}
@@ -135,6 +145,7 @@ class DB:
             "last_free_lc": "INTEGER DEFAULT 0",
             "layout":       "TEXT DEFAULT 'classic'",
             "title":        "TEXT DEFAULT '🎲 Новичок'",
+            "last_storage_notify": "INTEGER DEFAULT 0",
         }
         for col, definition in needed_users.items():
             if col not in existing_cols:
@@ -784,3 +795,57 @@ class DB:
             (user_id, slot)
         )
         self.conn.commit()
+
+        # ================= ТЕХПЕРЕРЫВ =================
+
+    def get_maintenance(self):
+        cur = self.conn.execute(
+            "SELECT enabled, reason, started_at FROM maintenance WHERE id=1"
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"enabled": False, "reason": "", "started_at": 0}
+        return {
+            "enabled": bool(row[0]),
+            "reason": row[1] or "",
+            "started_at": row[2] or 0,
+        }
+
+    def set_maintenance(self, enabled, reason=""):
+        self.conn.execute(
+            "UPDATE maintenance SET enabled=?, reason=?, started_at=? WHERE id=1",
+            (1 if enabled else 0, reason, int(time.time()) if enabled else 0)
+        )
+        self.conn.commit()
+
+    # ================= ПУШИ ХРАНИЛИЩА =================
+
+    def get_users_with_casino(self):
+        cur = self.conn.execute("SELECT user_id FROM casinos")
+        return [row[0] for row in cur.fetchall()]
+
+    def get_all_user_ids(self):
+        cur = self.conn.execute("SELECT user_id FROM users")
+        return [row[0] for row in cur.fetchall()]
+
+    def get_last_storage_notify(self, user_id):
+        cur = self.conn.execute(
+            "SELECT last_storage_notify FROM casinos WHERE user_id=?", (user_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else 0
+
+    def set_last_storage_notify(self, user_id, ts):
+        self.conn.execute(
+            "UPDATE casinos SET last_storage_notify=? WHERE user_id=?",
+            (ts, user_id)
+        )
+        self.conn.commit()
+
+    def is_storage_full(self, user_id):
+        """True если хранилище казино заполнено (8+ часов)."""
+        casino = self.get_casino(user_id)
+        if not casino:
+            return False
+        _, elapsed, _ = self.get_pending_income(user_id)
+        return elapsed >= self.CASINO_MAX_HOURS * 3600

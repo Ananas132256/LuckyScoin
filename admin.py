@@ -2,6 +2,12 @@ from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import os
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+
+
+class MaintStates(StatesGroup):
+    waiting_for_reason = State()
 
 
 ADMIN_IDS = [
@@ -32,6 +38,12 @@ class Admin:
         dp.callback_query(F.data == "admin_help")(self.cb_help)
         dp.callback_query(F.data == "admin_refresh")(self.cb_stats)
 
+        #техперерыыв
+        dp.callback_query(F.data == "admin_maint")(self.cb_maint)
+        dp.callback_query(F.data == "admin_maint_on")(self.cb_maint_on_start)
+        dp.callback_query(F.data == "admin_maint_off")(self.cb_maint_off)
+        dp.message(MaintStates.waiting_for_reason)(self.on_maint_reason)
+
     def _check(self, message: Message) -> bool:
         return is_admin(message.from_user.id)
 
@@ -42,9 +54,10 @@ class Admin:
 
     def _admin_kb(self):
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить",   callback_data="admin_refresh")],
-            [InlineKeyboardButton(text="💰 Экономика",  callback_data="admin_econ")],
-            [InlineKeyboardButton(text="📋 Помощь",     callback_data="admin_help")],
+            [InlineKeyboardButton(text="🔄 Обновить",    callback_data="admin_refresh")],
+            [InlineKeyboardButton(text="💰 Экономика",   callback_data="admin_econ")],
+            [InlineKeyboardButton(text="🛠 Техперерыв",   callback_data="admin_maint")],
+            [InlineKeyboardButton(text="📋 Помощь",      callback_data="admin_help")],
         ])
 
     async def cmd_admin(self, message: Message):
@@ -248,3 +261,108 @@ class Admin:
             f"📊 Винрейт: {winrate}%"
         )
         await message.answer(text, parse_mode="Markdown")
+
+        # ================= ТЕХПЕРЕРЫВ =================
+
+    async def cb_maint(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        maint = self.brain.db.get_maintenance()
+        status = "🔴 ВКЛЮЧЁН" if maint["enabled"] else "🟢 ВЫКЛЮЧЕН"
+        reason = maint["reason"] or "—"
+
+        text = (
+            "🛠 <b>Технический перерыв</b>\n\n"
+            f"Статус: {status}\n"
+            f"Причина: <i>{reason}</i>\n\n"
+            "Когда включён — все юзеры (кроме админов) не могут играть.\n"
+            "При выключении — всем уйдёт уведомление."
+        )
+
+        buttons = []
+        if maint["enabled"]:
+            buttons.append([InlineKeyboardButton(
+                text="✅ Выключить техперерыв",
+                callback_data="admin_maint_off"
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                text="🛠 Включить техперерыв",
+                callback_data="admin_maint_on"
+            )])
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_refresh")])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await query.answer()
+
+    async def cb_maint_on_start(self, query: CallbackQuery, state: FSMContext):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+        await state.set_state(MaintStates.waiting_for_reason)
+        text = (
+            "🛠 <b>Включение техперерыва</b>\n\n"
+            "Напиши причину для юзеров (например: «обновляем слоты, скоро вернёмся»).\n\n"
+            "<i>Чтобы отменить — /cancel.</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_maint")]
+        ])
+        await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await query.answer()
+
+    async def on_maint_reason(self, message: Message, state: FSMContext):
+        if not self._check(message):
+            return
+        reason = (message.text or "").strip()
+        if reason.startswith("/"):
+            await state.clear()
+            return await message.answer("Ок, отменено.")
+        if not (3 <= len(reason) <= 200):
+            return await message.answer("❌ Причина должна быть от 3 до 200 символов.")
+
+        self.brain.db.set_maintenance(True, reason)
+        await state.clear()
+        await message.answer(
+            f"✅ <b>Техперерыв включён</b>\n\n"
+            f"Причина: <i>{reason}</i>\n\n"
+            f"Юзеры видят сообщение, играть не могут.",
+            parse_mode="HTML"
+        )
+
+        # Уведомляем всех (кроме админов)
+        await self._broadcast(
+            f"🛠 <b>Технический перерыв</b>\n\n"
+            f"Причина: <i>{reason}</i>\n\n"
+            f"Скоро вернёмся!"
+        )
+
+    async def cb_maint_off(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        self.brain.db.set_maintenance(False, "")
+        await query.answer("✅ Техперерыв выключен", show_alert=True)
+
+        # Уведомляем всех
+        await self._broadcast(
+            "✅ <b>Технические работы завершены!</b>\n\n"
+            "Снова всё работает — заходи и играй! 🎰"
+        )
+
+        await self.cb_maint(query)
+
+    async def _broadcast(self, text):
+        """Рассылает сообщение всем юзерам, кроме админов."""
+        user_ids = self.brain.db.get_all_user_ids()
+        sent = 0
+        for uid in user_ids:
+            if is_admin(uid):
+                continue
+            try:
+                await self.brain.bot.send_message(uid, text, parse_mode="HTML")
+                sent += 1
+            except Exception:
+                pass
+        return sent

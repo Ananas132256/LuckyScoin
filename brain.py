@@ -1,3 +1,4 @@
+import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from db import DB
@@ -7,7 +8,9 @@ from admin import Admin
 from shop import Shop
 from trade import Trade
 from tycoon import Tycoon
-from badges import Badges
+from middleware import MaintenanceMiddleware
+from notifier import notifier_loop
+from admin import ADMIN_IDS
 
 
 class Brain:
@@ -21,14 +24,23 @@ class Brain:
         self.shop = Shop(self)
         self.trade = Trade(self)
         self.tycoon = Tycoon(self)
-        self.badges = Badges(self)
 
     async def start(self):
+        # Middleware техперерыва — на все апдейты
+        mw = MaintenanceMiddleware(self, ADMIN_IDS)
+        self.dp.message.middleware(mw)
+        self.dp.callback_query.middleware(mw)
+
+        # Регистрация хендлеров
         self.menu.register(self.dp)
         self.game.register(self.dp)
         self.admin.register(self.dp)
         self.shop.register(self.dp)
         self.trade.register(self.dp)
         self.tycoon.register(self.dp)
-        self.badges.register(self.dp)
+        self.friends.register(self.dp)
+
+        # Фоновая задача для пушей о переполнении
+        asyncio.create_task(notifier_loop(self))
+
         await self.dp.start_polling(self.bot)
