@@ -34,7 +34,9 @@ class DB:
     EVENT_DURATION = 1800
 
     def __init__(self):
-        self.conn = sqlite3.connect("casino.db")
+        import os
+        os.makedirs("data", exist_ok=True)
+        self.conn = sqlite3.connect("data/casino.db")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -88,7 +90,8 @@ class DB:
                 total_earned INTEGER DEFAULT 0,
                 pending_event TEXT DEFAULT NULL,
                 event_expires INTEGER DEFAULT 0,
-                last_event INTEGER DEFAULT 0
+                last_event INTEGER DEFAULT 0,
+                last_storage_notify INTEGER DEFAULT 0
             )
         """)
         self.conn.execute("""
@@ -107,19 +110,6 @@ class DB:
                 PRIMARY KEY (user_id, staff_id)
             )
         """)
-        # ---- ТАБЛИЦА ДЛЯ МЕДАЛЕЙ ----
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_badges (
-                user_id  INTEGER,
-                slot     INTEGER,
-                badge_id TEXT,
-                PRIMARY KEY (user_id, slot)
-            )
-        """)
-        self._migrate()
-        self._init_items()
-        self.conn.commit()
-
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS maintenance (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -129,6 +119,9 @@ class DB:
             )
         """)
         self.conn.execute("INSERT OR IGNORE INTO maintenance (id, enabled) VALUES (1, 0)")
+        self._migrate()
+        self._init_items()
+        self.conn.commit()
 
     def _migrate(self):
         cur = self.conn.execute("PRAGMA table_info(users)")
@@ -145,7 +138,6 @@ class DB:
             "last_free_lc": "INTEGER DEFAULT 0",
             "layout":       "TEXT DEFAULT 'classic'",
             "title":        "TEXT DEFAULT '🎲 Новичок'",
-            "last_storage_notify": "INTEGER DEFAULT 0",
         }
         for col, definition in needed_users.items():
             if col not in existing_cols:
@@ -154,10 +146,11 @@ class DB:
         cur = self.conn.execute("PRAGMA table_info(casinos)")
         casino_cols = {row[1] for row in cur.fetchall()}
         needed_casino = {
-            "pending_event": "TEXT DEFAULT NULL",
-            "event_expires": "INTEGER DEFAULT 0",
-            "last_event":    "INTEGER DEFAULT 0",
-            "total_earned":  "INTEGER DEFAULT 0",
+            "pending_event":       "TEXT DEFAULT NULL",
+            "event_expires":       "INTEGER DEFAULT 0",
+            "last_event":          "INTEGER DEFAULT 0",
+            "total_earned":        "INTEGER DEFAULT 0",
+            "last_storage_notify": "INTEGER DEFAULT 0",
         }
         for col, definition in needed_casino.items():
             if col not in casino_cols:
@@ -767,36 +760,7 @@ class DB:
             return None, False
         return rank, rank <= limit
 
-    # ================= МЕДАЛИ =================
-
-    def get_user_badges(self, user_id):
-        """{slot: badge_id | None} для слотов 0..4."""
-        result = {i: None for i in range(5)}
-        cur = self.conn.execute(
-            "SELECT slot, badge_id FROM user_badges WHERE user_id=?",
-            (user_id,)
-        )
-        for slot, bid in cur.fetchall():
-            if 0 <= slot <= 4:
-                result[slot] = bid
-        return result
-
-    def set_user_badge(self, user_id, slot, badge_id):
-        self.conn.execute(
-            "INSERT INTO user_badges (user_id, slot, badge_id) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, slot) DO UPDATE SET badge_id=excluded.badge_id",
-            (user_id, slot, badge_id)
-        )
-        self.conn.commit()
-
-    def remove_user_badge(self, user_id, slot):
-        self.conn.execute(
-            "DELETE FROM user_badges WHERE user_id=? AND slot=?",
-            (user_id, slot)
-        )
-        self.conn.commit()
-
-        # ================= ТЕХПЕРЕРЫВ =================
+    # ================= ТЕХПЕРЕРЫВ =================
 
     def get_maintenance(self):
         cur = self.conn.execute(
@@ -843,7 +807,6 @@ class DB:
         self.conn.commit()
 
     def is_storage_full(self, user_id):
-        """True если хранилище казино заполнено (8+ часов)."""
         casino = self.get_casino(user_id)
         if not casino:
             return False

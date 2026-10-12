@@ -11,7 +11,6 @@ BUTTONS = {
     "profile":  "👤 Профиль",
     "top":      "🏆 Лидерборд",
     "settings": "⚙️ Настройки",
-    "badges":   "🏅 Медальки",
 }
 
 LAYOUTS = {
@@ -21,8 +20,7 @@ LAYOUTS = {
             ["play"],
             ["casino", "shop"],
             ["trade", "profile"],
-            ["top", "badges"],
-            ["settings"],
+            ["top", "settings"],
         ],
     },
     "compact": {
@@ -30,8 +28,8 @@ LAYOUTS = {
         "rows": [
             ["play", "casino"],
             ["shop", "trade"],
-            ["profile", "badges"],
-            ["top", "settings"],
+            ["profile", "top"],
+            ["settings"],
         ],
     },
     "social": {
@@ -39,7 +37,7 @@ LAYOUTS = {
         "rows": [
             ["profile", "top"],
             ["trade", "casino"],
-            ["play", "badges"],
+            ["play"],
             ["shop", "settings"],
         ],
     },
@@ -49,7 +47,7 @@ LAYOUTS = {
             ["top", "play"],
             ["casino", "trade"],
             ["profile", "shop"],
-            ["badges", "settings"],
+            ["settings"],
         ],
     },
     "minimal": {
@@ -58,7 +56,6 @@ LAYOUTS = {
             ["play"],
             ["casino"],
             ["profile"],
-            ["badges"],
         ],
     },
 }
@@ -156,13 +153,13 @@ class Menu:
         percent = int(u["xp"] / xp_needed * 100)
 
         text = (
-            f"🎰 **LuckyScoin**\n\n"
+            f"🎰 <b>LuckyScoin</b>\n\n"
             f"👤 @{u['username']}  •  🏷 {u['title']}\n"
-            f"⭐ Ур. **{u['level']}**\n"
-            f"`{bar}` {percent}%\n"
+            f"⭐ Ур. <b>{u['level']}</b>\n"
+            f"<code>{bar}</code> {percent}%\n"
             f"XP: {u['xp']}/{xp_needed}\n\n"
-            f"💰 SC: **{u['sc']}**\n"
-            f"🍀 LC: **{u['lc']}**\n\n"
+            f"💰 SC: <b>{u['sc']}</b>\n"
+            f"🍀 LC: <b>{u['lc']}</b>\n\n"
             f"Выбери действие:"
         )
 
@@ -170,7 +167,7 @@ class Menu:
             await query.message.edit_text(
                 text,
                 reply_markup=self.main_keyboard(user_id),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -191,33 +188,16 @@ class Menu:
             income = self.brain.db.get_income_per_hour(user_id)
             pending, _, _ = self.brain.db.get_pending_income(user_id)
             casino_block = (
-                f"\n🏢 **{casino['name']}** (ур. {casino['level']})\n"
+                f"\n🏢 <b>{casino['name']}</b> (ур. {casino['level']})\n"
                 f"💵 {income} LC/ч"
             )
             if pending > 0:
                 casino_block += f" • 💰 {pending} LC к сбору"
             casino_block += "\n"
 
-        # Медали
-        badges = self.brain.db.get_user_badges(user_id)
-        badges_line = []
-        try:
-            from badges import BADGES
-            for slot in range(5):
-                bid = badges.get(slot)
-                if bid and bid in BADGES:
-                    badges_line.append(BADGES[bid]["name"])
-        except Exception:
-            pass
-
-        badges_block = ""
-        if badges_line:
-            badges_block = "\n🏅 " + " • ".join(badges_line) + "\n"
-
         text = (
             f"👤 @{u['username']}\n"
-            f"🏷 {u['title']}\n"
-            f"{badges_block}\n"
+            f"🏷 {u['title']}\n\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
             f"💰 SC: {u['sc']}\n"
             f"🍀 LC: {u['lc']}"
@@ -231,7 +211,6 @@ class Menu:
         buttons = []
         if casino:
             buttons.append([InlineKeyboardButton(text="🏢 Открыть казино", callback_data="casino")])
-        buttons.append([InlineKeyboardButton(text="🏅 Медальки", callback_data="badges")])
         buttons.append([InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inv")])
         buttons.append([InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад",     callback_data="menu")])
@@ -268,11 +247,11 @@ class Menu:
         total_active = self.brain.db.count_active_casinos()
         total_all = self.brain.db.count_all_casinos()
 
-        lines = ["🏢 **Топ казино**\n"]
+        lines = ["🏢 <b>Топ казино</b>\n"]
 
         if not data:
             lines.append("Пока никто не прокачал своё казино.")
-            lines.append(f"_Всего открыто: {total_all}_")
+            lines.append(f"<i>Всего открыто: {total_all}</i>")
         else:
             medals = ["🥇", "🥈", "🥉"]
             for i, (uid, uname, title, cname, earned, level) in enumerate(data, 1):
@@ -280,23 +259,23 @@ class Menu:
                 name = f"@{uname}" if uname else f"ID {uid}"
                 income = self.brain.db.get_income_per_hour(uid)
                 lines.append(
-                    f"{medal} **{cname}** — ур. {level} ({income} LC/ч)\n"
+                    f"{medal} <b>{cname}</b> — ур. {level} ({income} LC/ч)\n"
                     f"    👤 {name} — 💼 {earned} LC"
                 )
-            lines.append(f"\n📊 Активных казино: **{total_active}** из {total_all}")
+            lines.append(f"\n📊 Активных казино: <b>{total_active}</b> из {total_all}")
 
         rank, in_top = self.brain.db.get_user_casino_position(user_id, limit=10)
         if rank is not None and not in_top:
             casino = self.brain.db.get_casino(user_id)
             if casino:
                 lines.append(
-                    f"\n🎯 **Твоё место: #{rank}** — «{casino['name']}» (ур. {casino['level']})"
+                    f"\n🎯 <b>Твоё место: #{rank}</b> — «{casino['name']}» (ур. {casino['level']})"
                 )
         elif rank is None:
             casino = self.brain.db.get_casino(user_id)
             if casino:
                 lines.append(
-                    f"\n💤 _Твоё казино «{casino['name']}» пока не в рейтинге._"
+                    f"\n💤 <i>Твоё казино «{casino['name']}» пока не в рейтинге.</i>"
                 )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -304,7 +283,7 @@ class Menu:
             [InlineKeyboardButton(text="⬅️ Назад",    callback_data="top_sc")],
         ])
         try:
-            await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="Markdown")
+            await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
         await query.answer()
@@ -321,7 +300,7 @@ class Menu:
     async def _show_top(self, query: CallbackQuery, sort_by: str):
         if sort_by == "winrate":
             data = self.brain.db.top_winrate(10)
-            lines = ["🏆 **Топ по винрейту** (мин 10 игр)\n"]
+            lines = ["🏆 <b>Топ по винрейту</b> (мин 10 игр)\n"]
             if not data:
                 lines.append("Пока пусто — мало кто отыграл 10+ игр.")
             medals = ["🥇", "🥈", "🥉"]
@@ -336,7 +315,7 @@ class Menu:
                 "sc": "SC", "lc": "LC", "level": "уровню",
                 "wins": "победам", "games": "играм",
             }.get(sort_by, sort_by)
-            lines = [f"🏆 **Топ по {label}**\n"]
+            lines = [f"🏆 <b>Топ по {label}</b>\n"]
             if not data:
                 lines.append("Пусто.")
             medals = ["🥇", "🥈", "🥉"]
@@ -350,7 +329,7 @@ class Menu:
             await query.message.edit_text(
                 "\n".join(lines),
                 reply_markup=self._top_kb(sort_by),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -363,13 +342,13 @@ class Menu:
         layout_name = LAYOUTS.get(layout_key, LAYOUTS["classic"])["name"]
 
         text = (
-            "⚙️ **Настройки**\n\n"
+            "⚙️ <b>Настройки</b>\n\n"
             f"🎨 Раскладка: {layout_name}\n"
             f"🏷 Титул: {title}\n\n"
             "Выбери, что изменить:"
         )
         try:
-            await query.message.edit_text(text, reply_markup=self.settings_keyboard(), parse_mode="Markdown")
+            await query.message.edit_text(text, reply_markup=self.settings_keyboard(), parse_mode="HTML")
         except Exception:
             pass
         await query.answer()
@@ -379,10 +358,10 @@ class Menu:
         current = self.brain.db.get_layout(user_id)
         try:
             await query.message.edit_text(
-                "🎨 **Выбери раскладку кнопок:**\n\n"
+                "🎨 <b>Выбери раскладку кнопок:</b>\n\n"
                 "Она определяет, как расположены кнопки в главном меню.",
                 reply_markup=self.layout_keyboard(current),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -402,11 +381,11 @@ class Menu:
         current = self.brain.db.get_title(user_id)
         try:
             await query.message.edit_text(
-                f"🏷 **Титулы**\n\nТвой уровень: {level}\n"
+                f"🏷 <b>Титулы</b>\n\nТвой уровень: {level}\n"
                 "Титулы открываются по мере прокачки.\n"
                 "Эксклюзивные титулы можно купить в магазине за SC.",
                 reply_markup=self.titles_keyboard(level, current),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception:
             pass
