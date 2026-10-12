@@ -26,21 +26,17 @@ class Brain:
         self.tycoon = Tycoon(self)
 
     async def start(self):
-        # Middleware техперерыва — на все апдейты
         mw = MaintenanceMiddleware(self, ADMIN_IDS)
         self.dp.message.middleware(mw)
         self.dp.callback_query.middleware(mw)
 
-        # Регистрация хендлеров
         self.menu.register(self.dp)
         self.game.register(self.dp)
         self.admin.register(self.dp)
         self.shop.register(self.dp)
         self.trade.register(self.dp)
         self.tycoon.register(self.dp)
-        self.friends.register(self.dp)
 
-        # Фоновая задача для пушей о переполнении
         asyncio.create_task(notifier_loop(self))
 
         await self.dp.start_polling(self.bot)
