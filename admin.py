@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 import os
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+import asyncio
 
 
 class MaintStates(StatesGroup):
@@ -43,6 +44,10 @@ class Admin:
         dp.callback_query(F.data == "admin_maint_on")(self.cb_maint_on_start)
         dp.callback_query(F.data == "admin_maint_off")(self.cb_maint_off)
         dp.message(MaintStates.waiting_for_reason)(self.on_maint_reason)
+
+                # рассылка + компенсация
+        dp.message(Command("broadcast"))(self.cmd_broadcast)
+        dp.message(Command("compensate"))(self.cmd_compensate)
 
     def _check(self, message: Message) -> bool:
         return is_admin(message.from_user.id)
@@ -366,3 +371,93 @@ class Admin:
             except Exception:
                 pass
         return sent
+
+        # ================= РАССЫЛКА =================
+
+    async def cmd_broadcast(self, message: Message):
+        if not self._check(message):
+            return
+        # /broadcast текст сообщения
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            return await message.answer(
+                "📢 <b>Рассылка</b>\n\n"
+                "Использование:\n"
+                "<code>/broadcast Текст сообщения</code>\n\n"
+                "Пример:\n"
+                "<code>/broadcast 🎉 Мы вернулись! Всем по 500 LC!</code>",
+                parse_mode="HTML"
+            )
+
+        text = parts[1].strip()
+        user_ids = self.brain.db.get_all_user_ids()
+        total = len(user_ids)
+
+        status = await message.answer(f"📤 Рассылаю {total} юзерам...")
+
+        sent = 0
+        failed = 0
+        for uid in user_ids:
+            try:
+                await self.brain.bot.send_message(uid, text, parse_mode="HTML")
+                sent += 1
+                # анти-флуд телеги: 30 сообщений в секунду максимум
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+
+        await status.edit_text(
+            f"✅ <b>Рассылка завершена</b>\n\n"
+            f"📤 Отправлено: <b>{sent}</b>\n"
+            f"❌ Не дошло: <b>{failed}</b>\n"
+            f"👥 Всего: {total}",
+            parse_mode="HTML"
+        )
+
+    async def cmd_compensate(self, message: Message):
+        if not self._check(message):
+            return
+        # /compensate sc 100  -> выдать всем 100 SC
+        # /compensate lc 500  -> выдать всем 500 LC
+        parts = message.text.split()
+        if len(parts) != 3:
+            return await message.answer(
+                "🎁 <b>Компенсация всем</b>\n\n"
+                "Использование:\n"
+                "<code>/compensate &lt;sc|lc&gt; &lt;amount&gt;</code>\n\n"
+                "Примеры:\n"
+                "<code>/compensate lc 500</code> — 500 LC всем\n"
+                "<code>/compensate sc 10</code> — 10 SC всем",
+                parse_mode="HTML"
+            )
+
+        currency = parts[1].lower()
+        if currency not in ("sc", "lc"):
+            return await message.answer("❌ Валюта: sc или lc")
+
+        try:
+            amount = int(parts[2])
+        except ValueError:
+            return await message.answer("❌ Сумма должна быть числом")
+        if amount <= 0:
+            return await message.answer("❌ Сумма должна быть больше 0")
+
+        user_ids = self.brain.db.get_all_user_ids()
+        total = len(user_ids)
+
+        status = await message.answer(f"🎁 Начисляю {amount} {currency.upper()} {total} юзерам...")
+
+        sent = 0
+        for uid in user_ids:
+            try:
+                self.brain.db.add_balance(uid, currency, amount)
+                sent += 1
+            except Exception:
+                pass
+
+        await status.edit_text(
+            f"✅ <b>Компенсация выдана</b>\n\n"
+            f"💰 Каждому: <b>+{amount} {currency.upper()}</b>\n"
+            f"👥 Юзеров: <b>{sent}</b>",
+            parse_mode="HTML"
+        )
