@@ -32,6 +32,14 @@ TYPE_ALIASES = {
 #  ХЕЛПЕРЫ
 # ============================================================
 
+async def safe_answer(query, *args, **kwargs):
+    """Безопасный ответ на callback — глушит 'query too old'."""
+    try:
+        await query.answer(*args, **kwargs)
+    except Exception:
+        pass
+
+
 def _runs(symbols):
     result = {}
     if not symbols:
@@ -123,7 +131,6 @@ class Game:
         self.brain = brain
 
     def register(self, dp: Dispatcher):
-        # callback'и
         dp.callback_query(F.data == "play")(self.cb_play)
         dp.callback_query(F.data.startswith("choose_"))(self.cb_choose_type)
         dp.callback_query(F.data.startswith("again_"))(self.cb_spin_again)
@@ -132,9 +139,7 @@ class Game:
         dp.callback_query(F.data == "free_lc")(self.cb_free_lc)
         dp.callback_query(F.data == "exchange")(self.cb_exchange)
         dp.callback_query(F.data == "buy_sc")(self.cb_buy_sc)
-        # FSM (должен быть раньше текстовых команд!)
         dp.message(BetStates.waiting_for_bet)(self.on_bet_input)
-        # текстовые команды
         dp.message(F.text.func(lambda t: bool(t) and t.strip().lower().startswith("крутить")))(self.cmd_spin_text)
         dp.message(F.text.func(lambda t: bool(t) and t.strip().lower().startswith("обмен")))(self.cmd_exchange_text)
 
@@ -329,7 +334,7 @@ class Game:
         return total_mult, is_item_any, final_symbols, reroll_count
 
     # ---------------------------------------------------------
-    #  ЗАПУСК ИГРЫ (общая функция для callback и текста)
+    #  ЗАПУСК ИГРЫ
     # ---------------------------------------------------------
     async def _start_game(self, message: Message, spin_key: str, bet: int):
         user_id = message.from_user.id
@@ -381,6 +386,7 @@ class Game:
     #  МЕНЮ (callback)
     # ---------------------------------------------------------
     async def cb_play(self, query: CallbackQuery, state: FSMContext = None):
+        await safe_answer(query)
         if state:
             await state.clear()
         user_id = query.from_user.id
@@ -416,18 +422,17 @@ class Game:
         await self._safe_edit(query.message, text,
                               reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                               parse_mode="HTML")
-        await query.answer()
 
     async def cb_locked(self, query: CallbackQuery):
-        await query.answer("🔒 Недостаточный уровень!", show_alert=True)
+        await safe_answer(query, "🔒 Недостаточный уровень!", show_alert=True)
 
     async def _ask_bet(self, query, spin_key, state):
         if spin_key not in self.SPIN_TYPES:
-            return await query.answer("Неизвестный тип!", show_alert=True)
+            return await safe_answer(query, "Неизвестный тип!", show_alert=True)
         user_id = query.from_user.id
         level, _ = self.brain.db.get_level_xp(user_id)
         if level < self.LEVEL_REQ.get(spin_key, 0):
-            return await query.answer(f"Нужен уровень {self.LEVEL_REQ[spin_key]}!", show_alert=True)
+            return await safe_answer(query, f"Нужен уровень {self.LEVEL_REQ[spin_key]}!", show_alert=True)
         name, min_b, max_b, mult = self.SPIN_TYPES[spin_key]
         await state.set_state(BetStates.waiting_for_bet)
         await state.update_data(spin_key=spin_key, min_bet=min_b, max_bet=max_b)
@@ -438,15 +443,17 @@ class Game:
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_bet")]]),
             parse_mode="HTML")
-        await query.answer()
 
     async def cb_choose_type(self, query: CallbackQuery, state: FSMContext):
+        await safe_answer(query)
         await self._ask_bet(query, query.data.split("_", 1)[1], state)
 
     async def cb_spin_again(self, query: CallbackQuery, state: FSMContext):
+        await safe_answer(query)
         await self._ask_bet(query, query.data.split("_", 1)[1], state)
 
     async def cb_cancel_bet(self, query: CallbackQuery, state: FSMContext):
+        await safe_answer(query)
         await state.clear()
         await self.cb_play(query, state)
 
@@ -489,7 +496,6 @@ class Game:
         args = message.text.strip().split()
         user_id = message.from_user.id
 
-        # крутить (без аргументов)
         if len(args) == 1:
             return await message.answer(
                 "🎰 <b>Текстовые команды для круток</b>\n\n"
@@ -501,7 +507,6 @@ class Game:
                 parse_mode="HTML"
             )
 
-        # крутить <тип>
         type_str = args[1].lower()
         spin_key = TYPE_ALIASES.get(type_str)
         if not spin_key:
@@ -515,7 +520,6 @@ class Game:
 
         name, min_b, max_b, _ = self.SPIN_TYPES[spin_key]
 
-        # крутить <тип> (без ставки) — ждём ввод
         if len(args) == 2:
             await state.set_state(BetStates.waiting_for_bet)
             await state.update_data(spin_key=spin_key, min_bet=min_b, max_bet=max_b)
@@ -525,7 +529,6 @@ class Game:
                 parse_mode="HTML"
             )
 
-        # крутить <тип> <ставка>
         try:
             bet = int(args[2])
         except ValueError:
@@ -543,6 +546,7 @@ class Game:
     #  ОБМЕННИК — КНОПКА
     # ---------------------------------------------------------
     async def cb_exchange(self, query: CallbackQuery):
+        await safe_answer(query)
         text = (
             "💱 <b>Обмен валют</b>\n\n"
             f"LC → SC: <b>{EXCHANGE_LC_TO_SC} LC</b> = <b>1 SC</b>\n"
@@ -559,7 +563,6 @@ class Game:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
-        await query.answer()
 
     # ---------------------------------------------------------
     #  ОБМЕННИК — ТЕКСТ
@@ -568,7 +571,6 @@ class Game:
         args = message.text.strip().split()
         user_id = message.from_user.id
 
-        # обмен (без аргументов) — справка
         if len(args) < 3:
             return await message.answer(
                 "💱 <b>Обмен валют</b>\n\n"
@@ -578,7 +580,6 @@ class Game:
                 parse_mode="HTML"
             )
 
-        # Парсим сумму
         try:
             amount = int(args[1])
         except ValueError:
@@ -591,15 +592,13 @@ class Game:
             return await message.answer("❌ Валюта: <b>lc</b> или <b>sc</b>.",
                                         parse_mode="HTML")
 
-        # ===== LC → SC =====
         if currency == "lc":
             if amount < EXCHANGE_LC_TO_SC:
                 return await message.answer(
                     f"❌ Минимум {EXCHANGE_LC_TO_SC} LC для обмена.")
             balance = self.brain.db.get_balance(user_id, "lc")
             if balance < amount:
-                return await message.answer(
-                    f"❌ У тебя только {balance} LC.")
+                return await message.answer(f"❌ У тебя только {balance} LC.")
 
             gained_sc = amount // EXCHANGE_LC_TO_SC
             used_lc = gained_sc * EXCHANGE_LC_TO_SC
@@ -610,11 +609,9 @@ class Game:
                 parse_mode="HTML"
             )
 
-        # ===== SC → LC =====
         balance = self.brain.db.get_balance(user_id, "sc")
         if balance < amount:
-            return await message.answer(
-                f"❌ У тебя только {balance} SC.")
+            return await message.answer(f"❌ У тебя только {balance} SC.")
 
         gained_lc = amount * EXCHANGE_SC_TO_LC
         self.brain.db.add_balance(user_id, "sc", -amount)
@@ -631,13 +628,14 @@ class Game:
         user_id = query.from_user.id
         last = self.brain.db.get_last_free_lc(user_id)
         if (time.time() - last) < 3600:
-            return await query.answer(
+            return await safe_answer(
+                query,
                 f"Подожди {int((3600 - (time.time() - last)) // 60)} мин.",
                 show_alert=True)
         self.brain.db.add_balance(user_id, "lc", 15)
         self.brain.db.set_last_free_lc(user_id, int(time.time()))
-        await query.answer("🎁 +15 LC!", show_alert=True)
+        await safe_answer(query, "🎁 +15 LC!", show_alert=True)
         await self.cb_play(query)
 
     async def cb_buy_sc(self, query: CallbackQuery):
-        await query.answer("💰 В разработке!", show_alert=True)
+        await safe_answer(query, "💰 В разработке!", show_alert=True)

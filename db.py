@@ -76,12 +76,6 @@ class DB:
                 next_refresh INTEGER DEFAULT 0
             )
         """)
-        self.conn.execute("INSERT OR IGNORE INTO shop_meta (id, next_refresh) VALUES (1, 0)")
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS shop_stock (
-                item_id INTEGER PRIMARY KEY
-            )
-        """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS casinos (
                 user_id INTEGER PRIMARY KEY,
@@ -811,4 +805,4 @@ class DB:
         if not casino:
             return False
         _, elapsed, _ = self.get_pending_income(user_id)
-        return elapsed >= self.CASINO_MAX_HOURS * 3600
+        return elapsed >= self.CASINO_MAX_HOURS * 3600  
