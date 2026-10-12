@@ -2,6 +2,7 @@ import time
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
+SHOP_ENABLED = False
 
 RARITY_EMOJI = {
     "common":    "⚪",
@@ -25,6 +26,11 @@ def _format_time_left(seconds):
         return f"{h}ч {m}м"
     return f"{m}м"
 
+async def safe_answer(query, *args, **kwargs):
+    try:
+        await query.answer(*args, **kwargs)
+    except Exception:
+        pass
 
 class Shop:
     def __init__(self, brain):
@@ -45,6 +51,27 @@ class Shop:
         ])
 
     async def cb_shop(self, query: CallbackQuery):
+        if not SHOP_ENABLED:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]
+            ])
+            text = (
+                "🛒 <b>Магазин временно недоступен</b>\n\n"
+                "Мы обновляем ассортимент и улучшаем систему покупок.\n"
+                "Скоро вернёмся с новыми предметами! 🎁\n\n"
+                "<i>Следи за новостями в боте.</i>"
+            )
+            try:
+                await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
+            try:
+                await query.answer("🛒 Магазин обновляется", show_alert=True)
+            except Exception:
+                pass
+            return
+        
+        await safe_answer(query)
         user_id = query.from_user.id
         sc = self.brain.db.get_balance(user_id, "sc")
 
@@ -63,7 +90,6 @@ class Shop:
             await query.message.edit_text(text, reply_markup=self.main_kb(), parse_mode="Markdown")
         except Exception:
             pass
-        await query.answer()
 
     async def cb_cat(self, query: CallbackQuery):
         cat = query.data.replace("shop_cat_", "")

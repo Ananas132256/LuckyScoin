@@ -1,6 +1,7 @@
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+import time
 
 
 BUTTONS = {
@@ -50,6 +51,35 @@ async def safe_answer(query, *args, **kwargs):
         await query.answer(*args, **kwargs)
     except Exception:
         pass
+
+
+def _fmt_duration(seconds: int) -> str:
+    """3600 → '1ч 0м', 125 → '2м'"""
+    if seconds < 60:
+        return f"{seconds}с"
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    if h > 0:
+        return f"{h}ч {m}м"
+    return f"{m}м"
+
+
+def _maint_line(brain) -> str:
+    """Возвращает строку с инфой о техперерыве или пустую строку."""
+    try:
+        maint = brain.db.get_maintenance()
+        if not maint["enabled"]:
+            return ""
+        elapsed = int(time.time()) - maint["started_at"]
+        duration = _fmt_duration(max(0, elapsed))
+        reason = maint["reason"] or "ведутся работы"
+        return (
+            f"\n\n🛠 <b>Технический перерыв</b>\n"
+            f"⏳ Длится уже: <b>{duration}</b>\n"
+            f"<i>{reason}</i>"
+        )
+    except Exception:
+        return ""
 
 
 class Menu:
@@ -116,10 +146,9 @@ class Menu:
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.first_name or "anon"
         self.brain.db.set_username(user_id, username)
-        await message.answer(
-            "Добро пожаловать в LuckyScoin 🎰\nВыбери действие:",
-            reply_markup=self.main_keyboard(user_id)
-        )
+        text = "Добро пожаловать в LuckyScoin 🎰\nВыбери действие:"
+        text += _maint_line(self.brain)
+        await message.answer(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
 
     async def cb_menu(self, query: CallbackQuery):
         await safe_answer(query)
@@ -138,9 +167,10 @@ class Menu:
             f"<code>{bar}</code> {percent}%\n"
             f"XP: {u['xp']}/{xp_needed}\n\n"
             f"💰 SC: <b>{u['sc']}</b>\n"
-            f"🍀 LC: <b>{u['lc']}</b>\n\n"
+            f"🍀 LC: <b>{u['lc']}</b>\n"
             f"Выбери действие:"
         )
+        text += _maint_line(self.brain)
         try:
             await query.message.edit_text(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
         except Exception:
