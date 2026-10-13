@@ -8,6 +8,7 @@ from admin import Admin
 from shop import Shop
 from trade import Trade
 from tycoon import Tycoon
+from inventory import Inventory
 from middleware import MaintenanceMiddleware
 from notifier import notifier_loop
 from admin import ADMIN_IDS
@@ -24,6 +25,7 @@ class Brain:
         self.shop = Shop(self)
         self.trade = Trade(self)
         self.tycoon = Tycoon(self)
+        self.inventory = Inventory(self)
 
     async def start(self):
         mw = MaintenanceMiddleware(self, ADMIN_IDS)
@@ -36,6 +38,7 @@ class Brain:
         self.shop.register(self.dp)
         self.trade.register(self.dp)
         self.tycoon.register(self.dp)
+        self.inventory.register(self.dp)
 
         asyncio.create_task(notifier_loop(self))
 

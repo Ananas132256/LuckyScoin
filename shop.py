@@ -2,7 +2,7 @@ import time
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-SHOP_ENABLED = False
+SHOP_ENABLED = True
 
 RARITY_EMOJI = {
     "common":    "⚪",
@@ -26,11 +26,13 @@ def _format_time_left(seconds):
         return f"{h}ч {m}м"
     return f"{m}м"
 
+
 async def safe_answer(query, *args, **kwargs):
     try:
         await query.answer(*args, **kwargs)
     except Exception:
         pass
+
 
 class Shop:
     def __init__(self, brain):
@@ -38,7 +40,8 @@ class Shop:
 
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "shop")(self.cb_shop)
-        dp.callback_query(F.data == "inv")(self.cb_inventory)
+        # ВАЖНО: обработчик "inv" убран — теперь им занимается Inventory
+        # dp.callback_query(F.data == "inv")(self.cb_inventory)
         dp.callback_query(F.data.startswith("shop_cat_"))(self.cb_cat)
         dp.callback_query(F.data.startswith("shop_buy_"))(self.cb_buy)
 
@@ -46,7 +49,6 @@ class Shop:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏷 Титулы", callback_data="shop_cat_title")],
             [InlineKeyboardButton(text="🎖 Значки", callback_data="shop_cat_badge")],
-            [InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inv")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
         ])
 
@@ -70,7 +72,7 @@ class Shop:
             except Exception:
                 pass
             return
-        
+
         await safe_answer(query)
         user_id = query.from_user.id
         sc = self.brain.db.get_balance(user_id, "sc")
@@ -80,34 +82,33 @@ class Shop:
         timer = _format_time_left(seconds_left)
 
         text = (
-            f"🛒 **Магазин LuckyScoin**\n\n"
-            f"💰 Твой баланс: **{sc} SC**\n"
-            f"⏳ Обновление ассортимента через: **{timer}**\n\n"
+            f"🛒 <b>Магазин LuckyScoin</b>\n\n"
+            f"💰 Твой баланс: <b>{sc} SC</b>\n"
+            f"⏳ Обновление ассортимента через: <b>{timer}</b>\n\n"
             f"Ассортимент меняется каждые 6 часов!\n"
             f"Выбери категорию:"
         )
         try:
-            await query.message.edit_text(text, reply_markup=self.main_kb(), parse_mode="Markdown")
+            await query.message.edit_text(text, reply_markup=self.main_kb(), parse_mode="HTML")
         except Exception:
             pass
 
     async def cb_cat(self, query: CallbackQuery):
         cat = query.data.replace("shop_cat_", "")
 
-        # Товары этой категории из текущей ротации
         stock = self.brain.db.get_shop_items()
-        items = [row for row in stock if row[4] == cat]  # row = (id, name, price, rarity, category)
+        items = [row for row in stock if row[4] == cat]
 
         if not items:
             text = (
-                f"🛒 **{CATEGORY_NAMES.get(cat, cat)}**\n\n"
+                f"🛒 <b>{CATEGORY_NAMES.get(cat, cat)}</b>\n\n"
                 "Сейчас в этой категории нет товаров. Загляни после следующего обновления!"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ Назад", callback_data="shop")]
             ])
             try:
-                await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+                await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
             except Exception:
                 pass
             return await query.answer()
@@ -120,9 +121,9 @@ class Shop:
         timer = _format_time_left(seconds_left)
 
         lines = [
-            f"🛒 **{CATEGORY_NAMES.get(cat, cat)}**\n",
-            f"💰 Баланс: **{sc} SC**",
-            f"⏳ Обновление через: **{timer}**\n",
+            f"🛒 <b>{CATEGORY_NAMES.get(cat, cat)}</b>\n",
+            f"💰 Баланс: <b>{sc} SC</b>",
+            f"⏳ Обновление через: <b>{timer}</b>\n",
         ]
         buttons = []
         for item_id, name, price, rarity, _ in items:
@@ -138,7 +139,7 @@ class Shop:
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
-            await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="Markdown")
+            await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
         await query.answer()
@@ -158,29 +159,3 @@ class Shop:
             if item:
                 query.data = f"shop_cat_{item['category']}"
                 await self.cb_cat(query)
-
-    async def cb_inventory(self, query: CallbackQuery):
-        user_id = query.from_user.id
-        inv = self.brain.db.get_inventory(user_id)
-        if not inv:
-            text = "🎒 **Инвентарь**\n\nПока пусто. Купи что-нибудь в магазине!"
-        else:
-            lines = ["🎒 **Инвентарь**\n"]
-            current_cat = None
-            for item_id, qty, name, rarity, cat in inv:
-                if cat != current_cat:
-                    lines.append(f"\n**{CATEGORY_NAMES.get(cat, cat)}:**")
-                    current_cat = cat
-                qty_str = f" x{qty}" if qty > 1 else ""
-                lines.append(f"{RARITY_EMOJI.get(rarity, '⚪')} {name}{qty_str}")
-            text = "\n".join(lines)
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 В магазин", callback_data="shop")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-        ])
-        try:
-            await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception:
-            pass
-        await query.answer()

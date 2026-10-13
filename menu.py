@@ -11,39 +11,32 @@ BUTTONS = {
     "trade":    "💱 Трейд",
     "profile":  "👤 Профиль",
     "top":      "🏆 Лидерборд",
+    "inv":      "🎒 Инвентарь",
     "settings": "⚙️ Настройки",
 }
 
 LAYOUTS = {
     "classic": {
         "name": "🎰 Классика",
-        "rows": [["play"], ["casino", "shop"], ["trade", "profile"], ["top", "settings"]],
+        "rows": [["play"], ["casino", "shop"], ["trade", "profile"], ["top", "inv"], ["settings"]],
     },
     "compact": {
         "name": "📦 Компакт",
-        "rows": [["play", "casino"], ["shop", "trade"], ["profile", "top"], ["settings"]],
+        "rows": [["play", "casino"], ["shop", "trade"], ["profile", "inv"], ["top", "settings"]],
     },
     "social": {
         "name": "👤 Социальный",
-        "rows": [["profile", "top"], ["trade", "casino"], ["play"], ["shop", "settings"]],
+        "rows": [["profile", "top"], ["trade", "casino"], ["play", "inv"], ["shop", "settings"]],
     },
     "competitive": {
         "name": "🏆 Соревновательный",
-        "rows": [["top", "play"], ["casino", "trade"], ["profile", "shop"], ["settings"]],
+        "rows": [["top", "play"], ["casino", "trade"], ["profile", "shop"], ["inv", "settings"]],
     },
     "minimal": {
         "name": "🎯 Минимал",
-        "rows": [["play"], ["casino"], ["profile"]],
+        "rows": [["play"], ["casino"], ["profile"], ["inv"]],
     },
 }
-
-TITLES = [
-    ("🎲 Новичок", 0),
-    ("🍀 Везунчик", 5),
-    ("💎 Богач", 25),
-    ("🔥 Хайроллер", 50),
-    ("👑 Легенда", 100),
-]
 
 
 async def safe_answer(query, *args, **kwargs):
@@ -54,7 +47,6 @@ async def safe_answer(query, *args, **kwargs):
 
 
 def _fmt_duration(seconds: int) -> str:
-    """3600 → '1ч 0м', 125 → '2м'"""
     if seconds < 60:
         return f"{seconds}с"
     h = seconds // 3600
@@ -65,7 +57,6 @@ def _fmt_duration(seconds: int) -> str:
 
 
 def _maint_line(brain) -> str:
-    """Возвращает строку с инфой о техперерыве или пустую строку."""
     try:
         maint = brain.db.get_maintenance()
         if not maint["enabled"]:
@@ -95,8 +86,6 @@ class Menu:
         dp.callback_query(F.data == "settings")(self.cb_settings)
         dp.callback_query(F.data == "set_layout_menu")(self.cb_layouts)
         dp.callback_query(F.data.startswith("set_layout_"))(self.cb_set_layout)
-        dp.callback_query(F.data == "set_titles_menu")(self.cb_titles)
-        dp.callback_query(F.data.startswith("set_title_"))(self.cb_set_title)
         dp.callback_query(F.data == "top_casinos")(self.cb_top_casinos)
         dp.callback_query(F.data.in_({"top_sc", "top_lc", "top_level", "top_games", "top_winrate"}))(self.cb_top_sort)
 
@@ -116,7 +105,6 @@ class Menu:
     def settings_keyboard(self):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Раскладка кнопок", callback_data="set_layout_menu")],
-            [InlineKeyboardButton(text="🏷 Титулы",           callback_data="set_titles_menu")],
             [InlineKeyboardButton(text="⬅️ Назад",            callback_data="menu")],
         ])
 
@@ -125,20 +113,6 @@ class Menu:
         for key, data in LAYOUTS.items():
             mark = " ✅" if key == current else ""
             buttons.append([InlineKeyboardButton(text=data["name"] + mark, callback_data=f"set_layout_{key}")])
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")])
-        return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    def titles_keyboard(self, user_level, current_title):
-        buttons = []
-        for idx, (title, req_level) in enumerate(TITLES):
-            if user_level >= req_level:
-                mark = " ✅" if title == current_title else ""
-                buttons.append([InlineKeyboardButton(text=title + mark, callback_data=f"set_title_{idx}")])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=f"🔒 {title} (с {req_level} ур.)",
-                    callback_data=f"set_title_{idx}"
-                )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -184,6 +158,7 @@ class Menu:
         u = self.brain.db.get_user(user_id)
         winrate = round(u["wins"] / u["games"] * 100, 1) if u["games"] > 0 else 0
         xp_needed = 100 * (u["level"] + 1)
+
         casino = self.brain.db.get_casino(user_id)
         casino_block = ""
         if casino:
@@ -193,9 +168,22 @@ class Menu:
             if pending > 0:
                 casino_block += f" • 💰 {pending} LC к сбору"
             casino_block += "\n"
+
+        # Значки
+        badges_block = ""
+        try:
+            from cosmetics import BADGES
+            equipped = self.brain.db.get_user_badges(user_id)
+            names = [BADGES[bid]["name"] for bid in equipped.values() if bid and bid in BADGES]
+            if names:
+                badges_block = "\n🏅 " + " • ".join(names) + "\n"
+        except Exception:
+            pass
+
         text = (
             f"👤 @{u['username']}\n"
-            f"🏷 {u['title']}\n\n"
+            f"🏷 {u['title']}\n"
+            f"{badges_block}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
             f"💰 SC: {u['sc']}\n"
             f"🍀 LC: {u['lc']}"
@@ -212,7 +200,7 @@ class Menu:
         buttons.append([InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад",     callback_data="menu")])
         try:
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
         except Exception:
             pass
 
@@ -307,9 +295,12 @@ class Menu:
         await safe_answer(query)
         user_id = query.from_user.id
         layout_key = self.brain.db.get_layout(user_id)
-        title = self.brain.db.get_title(user_id)
         layout_name = LAYOUTS.get(layout_key, LAYOUTS["classic"])["name"]
-        text = f"⚙️ <b>Настройки</b>\n\n🎨 Раскладка: {layout_name}\n🏷 Титул: {title}\n\nВыбери, что изменить:"
+        text = (
+            f"⚙️ <b>Настройки</b>\n\n"
+            f"🎨 Раскладка: {layout_name}\n\n"
+            "Выбери, что изменить:"
+        )
         try:
             await query.message.edit_text(text, reply_markup=self.settings_keyboard(), parse_mode="HTML")
         except Exception:
@@ -335,31 +326,3 @@ class Menu:
         self.brain.db.set_layout(query.from_user.id, key)
         await safe_answer(query, f"✅ Раскладка: {LAYOUTS[key]['name']}")
         await self.cb_layouts(query)
-
-    async def cb_titles(self, query: CallbackQuery):
-        await safe_answer(query)
-        user_id = query.from_user.id
-        level, _ = self.brain.db.get_level_xp(user_id)
-        current = self.brain.db.get_title(user_id)
-        try:
-            await query.message.edit_text(
-                f"🏷 <b>Титулы</b>\n\nТвой уровень: {level}\nТитулы открываются по мере прокачки.\nЭксклюзивные титулы можно купить в магазине за SC.",
-                reply_markup=self.titles_keyboard(level, current),
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-
-    async def cb_set_title(self, query: CallbackQuery):
-        try:
-            idx = int(query.data.replace("set_title_", ""))
-        except ValueError:
-            return await safe_answer(query, "❌ Ошибка", show_alert=True)
-        title, req_level = TITLES[idx]
-        user_id = query.from_user.id
-        level, _ = self.brain.db.get_level_xp(user_id)
-        if level < req_level:
-            return await safe_answer(query, f"🔒 Нужен уровень {req_level}!", show_alert=True)
-        self.brain.db.set_title(user_id, title)
-        await safe_answer(query, f"✅ Титул: {title}")
-        await self.cb_titles(query)

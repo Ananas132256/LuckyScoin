@@ -113,6 +113,15 @@ class DB:
             )
         """)
         self.conn.execute("INSERT OR IGNORE INTO maintenance (id, enabled) VALUES (1, 0)")
+        # ---- ЗНАЧКИ ----
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_badges (
+                user_id  INTEGER,
+                slot     INTEGER,
+                badge_id TEXT,
+                PRIMARY KEY (user_id, slot)
+            )
+        """)
         self._migrate()
         self._init_items()
         self.conn.commit()
@@ -805,4 +814,45 @@ class DB:
         if not casino:
             return False
         _, elapsed, _ = self.get_pending_income(user_id)
-        return elapsed >= self.CASINO_MAX_HOURS * 3600  
+        return elapsed >= self.CASINO_MAX_HOURS * 3600
+
+    # ================= ЗНАЧКИ =================
+
+    def get_user_badges(self, user_id):
+        result = {i: None for i in range(5)}
+        cur = self.conn.execute(
+            "SELECT slot, badge_id FROM user_badges WHERE user_id=?",
+            (user_id,)
+        )
+        for slot, bid in cur.fetchall():
+            if 0 <= slot <= 4:
+                result[slot] = bid
+        return result
+
+    def set_user_badge(self, user_id, slot, badge_id):
+        self.conn.execute(
+            "INSERT INTO user_badges (user_id, slot, badge_id) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, slot) DO UPDATE SET badge_id=excluded.badge_id",
+            (user_id, slot, badge_id)
+        )
+        self.conn.commit()
+
+    def remove_user_badge(self, user_id, slot):
+        self.conn.execute(
+            "DELETE FROM user_badges WHERE user_id=? AND slot=?",
+            (user_id, slot)
+        )
+        self.conn.commit()
+
+    def get_active_effects(self, user_id):
+        try:
+            from cosmetics import BADGES
+        except Exception:
+            return {}
+        effects = {}
+        for bid in self.get_user_badges(user_id).values():
+            if not bid or bid not in BADGES:
+                continue
+            for k, v in BADGES[bid].get("effect", {}).items():
+                effects[k] = effects.get(k, 0) + v
+        return effects
