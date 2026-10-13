@@ -83,8 +83,26 @@ def eval_condition(cond_str: str, stats: dict) -> bool:
 
 # ---------- ПРИМЕНЕНИЕ ЭФФЕКТОВ ----------
 
+def _normalize_effects(effect_input):
+    """Normalize effect strings, including comma-separated and list formats."""
+    if isinstance(effect_input, str):
+        effect_strings = [effect_input]
+    elif isinstance(effect_input, list):
+        effect_strings = effect_input
+    else:
+        return []
+
+    return [
+        effect.strip()
+        for effect_string in effect_strings
+        if isinstance(effect_string, str)
+        for effect in effect_string.split(",")
+        if effect.strip()
+    ]
+
+
 def apply_effects(effect_strings, effects: dict):
-    for s in effect_strings:
+    for s in _normalize_effects(effect_strings):
         parsed = parse_effect_string(s)
         if not parsed:
             continue
@@ -105,14 +123,14 @@ def get_badge_effects(badge: dict, stats: dict) -> dict:
     for block in hard:
         if "if" in block:
             if eval_condition(block["if"], stats):
-                apply_effects([block.get("then", "")], effects)
+                apply_effects(block.get("then", ""), effects)
                 return effects
         elif "elif" in block:
             if eval_condition(block["elif"], stats):
-                apply_effects([block.get("then", "")], effects)
+                apply_effects(block.get("then", ""), effects)
                 return effects
         elif "else" in block:
-            apply_effects([block.get("else", "")], effects)
+            apply_effects(block.get("else", ""), effects)
             return effects
     return effects
 
