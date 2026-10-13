@@ -156,7 +156,11 @@ class Game:
             return {}
 
     def _pick_random_badge(self, user_id):
-        from cosmetics import BADGES
+        from cosmetics import BADGES, is_unlocked
+
+        user = self.brain.db.get_user(user_id)
+        rooms = self.brain.db.get_rooms(user_id) or []
+        room_level = max(rooms) if rooms else 0
 
         equipped = self.brain.db.get_user_badges(user_id)
         owned_ids = {bid for bid in equipped.values() if bid}
@@ -165,6 +169,7 @@ class Game:
             for badge_id, badge in BADGES.items()
             if badge.get("rarity") in self.ITEM_RARITY_WEIGHTS
             and badge_id not in owned_ids
+            and is_unlocked(badge, user, room_level)
         ]
         if not badge_weights:
             return None
@@ -559,6 +564,8 @@ class Game:
         name, _, _, spin_mult = self.SPIN_TYPES[spin_key]
         msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
                                    parse_mode="HTML")
+
+        self.brain.db.increment_badge_rolls(user_id)
 
         total_mult, is_item, symbols, rerolls, effects, any_burn, explosions = await self._resolve(
             msg, name, bet, spin_key, user_id
