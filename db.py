@@ -1124,6 +1124,7 @@ class DB:
         self.conn.execute("DELETE FROM casino_rooms WHERE user_id=?", (user_id,))
         self.conn.execute("DELETE FROM casino_staff WHERE user_id=?", (user_id,))
         self.conn.execute("DELETE FROM inventory WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
         self.conn.commit()
 
     def user_exists(self, user_id):
