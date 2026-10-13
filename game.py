@@ -348,6 +348,15 @@ class Game:
                                f"🎉 <b>ВЫИГРЫШ!</b> {spark}\n<i>{description}</i>")
             await asyncio.sleep(0.28)
 
+    async def _anim_bomb(self, message, name, bet, symbols, description):
+        line = " | ".join(symbols)
+        for frame in ["💥 💥 💥", "🧨", "☠️"]:
+            await self._render(
+                message, name, bet, line,
+                f"💣 <b>ВЗРЫВ!</b> {frame}\n<i>{description}</i>"
+            )
+            await asyncio.sleep(0.28)
+
     async def _anim_loss(self, message, name, bet, symbols):
         line = " | ".join(symbols)
         await self._render(message, name, bet, line, "😔 <i>Ничего не выпало...</i>")
@@ -394,7 +403,10 @@ class Game:
                     final_description = f"Паттерн «{verdict.get('pattern_name', '?')}»"
                 else:
                     final_description = f"{verdict['sym']} × {verdict['run']}"
-                await self._anim_win(message, name, bet, symbols, final_description)
+                if verdict["mult"] < 0:
+                    await self._anim_bomb(message, name, bet, symbols, final_description)
+                else:
+                    await self._anim_win(message, name, bet, symbols, final_description)
                 break
             if verdict["action"] == "reroll":
                 total_mult += verdict["mult"]
@@ -434,7 +446,11 @@ class Game:
         penalty_per_fire = self.FIRE_PENALTY * (1 - min(fire_reduction, 1.0))
         fire_factor = max(0.0, 1 - penalty_per_fire * fire_count)
 
-        win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor)
+        if effective_mult > 0:
+            win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor)
+        else:
+            # Fire reduces payouts, but must not soften negative bomb multipliers.
+            win_amount = math.ceil(bet * effective_mult * spin_mult)
 
         applied_loss = 0
         loss_was_capped = False
