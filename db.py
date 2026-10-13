@@ -34,9 +34,9 @@ class DB:
     EVENT_DURATION = 1800
 
     # Перегрев
-    OVERHEAT_PER_STAGE = 20        # очков на 1 стадию
+    OVERHEAT_PER_STAGE = 10        # очков на 1 стадию
     OVERHEAT_MAX_STAGE = 5
-    OVERHEAT_COOL_PER_2MIN = 20    # -1 стадия за 2 минуты простоя
+    OVERHEAT_COOL_PER_2MIN = 5    # -1 стадия за 2 минуты простоя
 
     def __init__(self):
         import os

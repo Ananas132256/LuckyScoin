@@ -110,11 +110,11 @@ class Game:
     }
 
     SPIN_ANIM = {
-        "common":   {"spin_frames": 8,  "spin_delay": 0.09, "stop_delay": 0.32, "last_stop_delay": 0.55, "fake_stops": 0, "label": "▶️"},
-        "uncommon": {"spin_frames": 10, "spin_delay": 0.09, "stop_delay": 0.36, "last_stop_delay": 0.65, "fake_stops": 1, "label": "⚡"},
-        "rare":     {"spin_frames": 12, "spin_delay": 0.10, "stop_delay": 0.40, "last_stop_delay": 0.80, "fake_stops": 2, "label": "💫"},
-        "ultra":    {"spin_frames": 16, "spin_delay": 0.10, "stop_delay": 0.45, "last_stop_delay": 1.00, "fake_stops": 3, "label": "🔥"},
-        "epic":     {"spin_frames": 24, "spin_delay": 0.11, "stop_delay": 0.50, "last_stop_delay": 1.00, "fake_stops": 4, "label": "👾"},
+        "common":   {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.00, "last_stop_delay": 2.00, "label": "▶️"},
+        "uncommon": {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.10, "last_stop_delay": 2.20, "label": "⚡"},
+        "rare":     {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.20, "last_stop_delay": 2.40, "label": "💫"},
+        "ultra":    {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.30, "last_stop_delay": 2.60, "label": "🔥"},
+        "epic":     {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.50, "last_stop_delay": 3.00, "label": "👾"},
     }
 
     NOISE = ["🎰", "🍒", "🍋", "7️⃣", "🎲", "🍀", "⚙️", "🪙", "💎", "🔔"]
@@ -314,82 +314,42 @@ class Game:
         await self._safe_edit(message, text, parse_mode="HTML")
 
     async def _anim_spin(self, message, name, bet, cfg):
-        await self._render(message, name, bet, "⬜ | ⬜ | ⬜ | ⬜ | ⬜",
-                           f"{cfg['label']} <i>Подготовка...</i>")
-        await asyncio.sleep(0.30)
         frames = cfg["spin_frames"]
         base_delay = cfg["spin_delay"]
         for i in range(frames):
             rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            progress = i / max(1, frames - 1)
-            if progress < 0.5:
-                sf = 1 - progress * 1.6
-            else:
-                sf = 0.2 + (progress - 0.5) * 3.0
-            delay = base_delay * max(0.15, sf)
-            if progress < 0.5:
-                speed = "⏩ ⏩ ⏩"
-            elif progress < 0.8:
-                speed = "⏩ ⏩ ▶️"
-            else:
-                speed = "⏩ ▶️ ▶️"
+            progress = (i + 1) / frames
+            speed = "⏩ ⏩ ▶️" if progress < 1 else "⏩ ▶️ ▶️"
             await self._render(message, name, bet, rnd,
                                f"{cfg['label']} <i>Крутим...</i> {speed}")
-            await asyncio.sleep(delay)
-        for _ in range(cfg["fake_stops"]):
-            fake = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            await self._render(message, name, bet, fake, "😮 <i>Остановка...</i>")
-            await asyncio.sleep(0.55)
-            for _ in range(3):
-                rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-                await self._render(message, name, bet, rnd, "🌀 <i>Обманка!</i>")
-                await asyncio.sleep(0.10)
-            for _ in range(2):
-                rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-                await self._render(message, name, bet, rnd, "⏩ <i>Ещё крутим!</i>")
-                await asyncio.sleep(0.08)
+            await asyncio.sleep(base_delay)
 
     async def _anim_reveal(self, message, name, bet, symbols, cfg):
-        shown = []
-        for idx, final_sym in enumerate(symbols):
-            shown.append(final_sym)
-            rest = ["🌫️"] * (5 - len(shown))
-            for _ in range(2):
-                shake = random.choice(self.NOISE)
-                temp = shown[:-1] + [shake] + rest
-                await self._render(
-                    message, name, bet, " | ".join(temp),
-                    f"{cfg['label']} <i>Остановка...</i> <code>{idx + 1}/5</code>"
-                )
-                await asyncio.sleep(0.12)
-            display = " | ".join(shown + rest)
-            sound = "💥" if idx == 4 else "🔔"
+        for shown_count in (3, 5):
+            display = " | ".join(symbols[:shown_count] + ["🌫️"] * (5 - shown_count))
+            sound = "💥" if shown_count == 5 else "🔔"
             await self._render(
                 message, name, bet, display,
-                f"{cfg['label']} <b>Стоп!</b> {sound} <code>{idx + 1}/5</code>"
+                f"{cfg['label']} <b>Стоп!</b> {sound} <code>{shown_count}/5</code>"
             )
-            if idx == 4:
+            if shown_count == 5:
                 await asyncio.sleep(cfg["last_stop_delay"])
             else:
-                await asyncio.sleep(cfg["stop_delay"] + idx * 0.10)
+                await asyncio.sleep(cfg["stop_delay"])
 
     async def _anim_overheat(self, message, name, bet, old_symbols, new_symbols):
         """Анимация возгорания ячеек после reveal."""
-        # Находим ячейки, которые загорелись
         burned_idx = [i for i in range(5) if old_symbols[i] != new_symbols[i]]
         if not burned_idx:
             return
 
-        # Показываем процесс — по одной ячейке
         shown = list(old_symbols)
         for idx in burned_idx:
             shown[idx] = "🔥"
-            display = " | ".join(shown)
-            await self._render(
-                message, name, bet, display,
-                "🔥 <b>ВОЗГОРАНИЕ!</b> <i>Ячейка загорелась...</i>"
-            )
-            await asyncio.sleep(0.35)
+        await self._render(
+            message, name, bet, " | ".join(shown),
+            "🔥 <b>ВОЗГОРАНИЕ!</b> <i>Ячейки загорелись...</i>"
+        )
         await asyncio.sleep(0.3)
 
     def _apply_chain_explosion(self, symbols):
@@ -427,30 +387,11 @@ class Game:
         if not chain_order:
             return
 
-        shown = list(old_symbols)
-        await self._render(
-            message, name, bet, " | ".join(shown),
-            "💥 <b>ДИНАМИТ РВАНУЛ!</b> <i>Цепная реакция...</i>"
-        )
-
-        for step, positions in chain_order:
-            for i in positions:
-                shown[i] = "🔥"
-                if i > 0:
-                    shown[i - 1] = "🔥"
-                if i + 1 < len(shown):
-                    shown[i + 1] = "🔥"
-            await self._render(
-                message, name, bet, " | ".join(shown),
-                f"💥 <b>ВЗРЫВ #{step}!</b> <i>Динамит сдетонировал...</i>"
-            )
-            await asyncio.sleep(0.32)
-
-        await asyncio.sleep(0.25)
         await self._render(
             message, name, bet, " | ".join(new_symbols),
-            "🔥 <b>Всё полыхает!</b> <i>Огонь перекинулся дальше...</i>"
+            f"💥 <b>Цепная реакция: {len(chain_order)}!</b> <i>Всё полыхает...</i>"
         )
+        await asyncio.sleep(0.3)
 
     async def _anim_reroll(self, message, name, bet, reroll_count, verdict, total):
         if verdict.get("reason") == "pattern":
@@ -458,27 +399,23 @@ class Game:
         else:
             header = "⚡ <b>Нестабильный символ!</b>\n<i>Перекрут...</i>"
         extra = f"🔄 Реролл <b>#{reroll_count}</b> • Копилка: <b>x{total:g}</b>"
-        for _ in range(4):
-            rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            await self._render(message, name, bet, rnd, header, extra)
-            await asyncio.sleep(0.16)
+        rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
+        await self._render(message, name, bet, rnd, header, extra)
         await asyncio.sleep(0.20)
 
     async def _anim_win(self, message, name, bet, symbols, description):
         line = " | ".join(symbols)
-        for spark in ["✨ 🎉 ✨", "🎊 🏆 🎊", "💥 ✨ 💥"]:
-            await self._render(message, name, bet, line,
-                               f"🎉 <b>ВЫИГРЫШ!</b> {spark}\n<i>{description}</i>")
-            await asyncio.sleep(0.28)
+        await self._render(message, name, bet, line,
+                           f"🎉 <b>ВЫИГРЫШ!</b> ✨ 🎉 ✨\n<i>{description}</i>")
+        await asyncio.sleep(0.28)
 
     async def _anim_bomb(self, message, name, bet, symbols, description):
         line = " | ".join(symbols)
-        for frame in ["💥 💥 💥", "🧨", "☠️"]:
-            await self._render(
-                message, name, bet, line,
-                f"💣 <b>ВЗРЫВ!</b> {frame}\n<i>{description}</i>"
-            )
-            await asyncio.sleep(0.28)
+        await self._render(
+            message, name, bet, line,
+            f"💣 <b>ВЗРЫВ!</b> 🧨\n<i>{description}</i>"
+        )
+        await asyncio.sleep(0.28)
 
     async def _anim_loss(self, message, name, bet, symbols):
         line = " | ".join(symbols)
