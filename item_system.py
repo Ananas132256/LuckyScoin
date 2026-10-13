@@ -198,13 +198,9 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_ITEM":
         new_id = after.get("item_id")
         if new_id and new_id in BADGES:
-<<<<<<< HEAD
-            # Новая медаль занимает первый свободный слот.
-=======
             # Новый значок попадает в первый свободный слот
             level = brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
->>>>>>> 3709f43dfb7ef5e2f47f9af30c4fb1ce3db9112e
             equipped = brain.db.get_user_badges(user_id)
             free_slot = None
             for i in range(max_slots):
