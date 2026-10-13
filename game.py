@@ -560,12 +560,7 @@ class Game:
         msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
                                    parse_mode="HTML")
 
-<<<<<<< HEAD
-        self.brain.db.increment_badge_rolls(user_id)
-        total_mult, is_item, symbols, rerolls, effects, any_burn = await self._resolve(
-=======
         total_mult, is_item, symbols, rerolls, effects, any_burn, explosions = await self._resolve(
->>>>>>> 3709f43dfb7ef5e2f47f9af30c4fb1ce3db9112e
             msg, name, bet, spin_key, user_id
         )
 
@@ -577,9 +572,12 @@ class Game:
         fire_reduction = effects.get("fire_reduction", 0)
         penalty_per_fire = self.FIRE_PENALTY * (1 - min(fire_reduction, 1.0))
         fire_factor = max(0.0, 1 - penalty_per_fire * fire_count)
+        win_mult = effects.get("win_mult", 1)
 
         if effective_mult > 0:
-            win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor)
+            win_amount = math.ceil(
+                bet * effective_mult * spin_mult * win_mult * fire_factor
+            )
         else:
             # Fire reduces payouts, but must not soften negative bomb multipliers.
             win_amount = math.ceil(bet * effective_mult * spin_mult)
@@ -604,8 +602,9 @@ class Game:
 
         self.brain.db.add_bet_stats(user_id, bet, win_amount)
 
-        # +1 к перегреву
-        self.brain.db.add_overheat(user_id)
+        # Базовый прирост + ускорение от экипированных значков.
+        overheat_gain = 1 + int(effects.get("overheat_speed", 0))
+        self.brain.db.add_overheat(user_id, overheat_gain)
 
         xp_gain = spin_mult * 20 * (2 if win_amount > 0 else 1)
         xp_bonus = effects.get("xp_bonus", 0)

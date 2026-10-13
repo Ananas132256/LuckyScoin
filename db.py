@@ -1307,14 +1307,14 @@ class DB:
         stage = min(self.OVERHEAT_MAX_STAGE, score // self.OVERHEAT_PER_STAGE)
         return stage, score
 
-    def add_overheat(self, user_id):
-        """+1 очко перегрева за спин. Максимум = 5 стадий * 20 = 100."""
+    def add_overheat(self, user_id, amount=1):
+        """Добавляет очки перегрева за спин, не превышая максимум."""
         self._ensure(user_id)
         cur = self.conn.execute(
             "SELECT overheat_score FROM users WHERE user_id=?",
             (user_id,)
         )
-        score = (cur.fetchone()[0] or 0) + 1
+        score = (cur.fetchone()[0] or 0) + amount
         cap = self.OVERHEAT_PER_STAGE * self.OVERHEAT_MAX_STAGE
         score = min(score, cap)
         self.conn.execute(

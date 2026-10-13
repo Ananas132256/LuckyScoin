@@ -155,7 +155,10 @@ def get_total_effects(brain, user_id: int) -> dict:
             roll_count = brain.db.get_badge_roll_count(user_id, slot)
             badge_eff = get_badge_effects(BADGES[bid], stats, roll_count)
             for k, v in badge_eff.items():
-                effects[k] = effects.get(k, 0) + v
+                if k == "win_mult":
+                    effects[k] = effects.get(k, 1) * v
+                else:
+                    effects[k] = effects.get(k, 0) + v
 
     for effect_name in ("luck", "mult_bonus", "xp_bonus"):
         multiplier_name = f"{effect_name}_mult"
@@ -198,13 +201,9 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_ITEM":
         new_id = after.get("item_id")
         if new_id and new_id in BADGES:
-<<<<<<< HEAD
-            # Новая медаль занимает первый свободный слот.
-=======
             # Новый значок попадает в первый свободный слот
             level = brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
->>>>>>> 3709f43dfb7ef5e2f47f9af30c4fb1ce3db9112e
             equipped = brain.db.get_user_badges(user_id)
             free_slot = None
             for i in range(max_slots):
