@@ -126,6 +126,9 @@ class Trade:
         if query.from_user.id != trade["to_id"]:
             return await query.answer("Это не твоё предложение.", show_alert=True)
 
+        # Забираем сделку из pending до проверок баланса, чтобы исключить двойное принятие.
+        del self.pending[trade_id]
+
         from_id = trade["from_id"]
         to_id = trade["to_id"]
         give = trade["give"]
@@ -133,7 +136,6 @@ class Trade:
         fee = max(1, (want * TRADE_FEE_PERCENT) // 100)
 
         if self.brain.db.get_balance(from_id, "sc") < give:
-            del self.pending[trade_id]
             return await query.answer("У отправителя уже нет столько SC.", show_alert=True)
         if self.brain.db.get_balance(to_id, "sc") < want + fee:
             return await query.answer(f"Нужно {want + fee} SC (включая комиссию).", show_alert=True)
@@ -144,8 +146,6 @@ class Trade:
         self.brain.db.add_balance(to_id, "sc", -(want + fee))
         self.brain.db.add_balance(from_id, "sc", want)
         # fee сжигается
-
-        del self.pending[trade_id]
 
         try:
             await query.message.edit_text(

@@ -178,7 +178,7 @@ def should_break(badge: dict, trigger: str) -> bool:
 
 
 def handle_break(brain, user_id: int, badge_id: str, slot: int):
-    from cosmetics import BADGES
+    from cosmetics import BADGES, badge_slots_for_level
     badge = BADGES.get(badge_id)
     if not badge:
         return None
@@ -189,8 +189,8 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
         return f"💔 <b>{badge['name']}</b> сломался и пропал."
     if t == "GET_SC":
         amt = after.get("amount", 0)
-        brain.db.add_balance(user_id, "sc", amt)
-        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} SC."
+        brain.db.add_balance(user_id, "lc", amt)
+        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} LC."
     if t == "GET_LC":
         amt = after.get("amount", 0)
         brain.db.add_balance(user_id, "lc", amt)
@@ -198,10 +198,16 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_ITEM":
         new_id = after.get("item_id")
         if new_id and new_id in BADGES:
+<<<<<<< HEAD
             # Новая медаль занимает первый свободный слот.
+=======
+            # Новый значок попадает в первый свободный слот
+            level = brain.db.get_user(user_id)["level"]
+            max_slots = badge_slots_for_level(level)
+>>>>>>> 3709f43dfb7ef5e2f47f9af30c4fb1ce3db9112e
             equipped = brain.db.get_user_badges(user_id)
             free_slot = None
-            for i in range(5):
+            for i in range(max_slots):
                 if not equipped.get(i):
                     free_slot = i
                     break
@@ -209,7 +215,7 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
                 brain.db.set_user_badge(user_id, free_slot, new_id)
                 return f"💔 <b>{badge['name']}</b> сломался! Взамен <b>{BADGES[new_id]['name']}</b>."
             else:
-                # нет свободного слота — дадим SC
-                brain.db.add_balance(user_id, "sc", 500)
-                return f"💔 <b>{badge['name']}</b> сломался! Слотов нет, +500 SC."
+                # нет свободного слота — дадим LC вместо SC
+                brain.db.add_balance(user_id, "lc", 5000)
+                return f"💔 <b>{badge['name']}</b> сломался! Слотов нет, +5000 LC."
     return f"💔 <b>{badge['name']}</b> сломался."
