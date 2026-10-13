@@ -24,18 +24,34 @@ class Inventory:
 
     def _ctx(self, user_id):
         u = self.brain.db.get_user(user_id)
+        u["user_id"] = user_id
         rooms = self.brain.db.get_rooms(user_id) or []
         room_level = max(rooms) if rooms else 0
         return u, room_level
 
     def _owned_badges(self, u: dict, room_level: int):
-        return {bid for bid, b in BADGES.items() if is_unlocked(b, u, room_level)}
+        return {
+            bid for bid, badge in BADGES.items()
+            if (
+                self.brain.db.has_item(u["user_id"], badge["shop_id"])
+                if badge.get("price_sc") and badge.get("shop_id")
+                else is_unlocked(badge, u, room_level)
+            )
+        }
 
     def _owned_titles(self, u: dict, room_level: int):
-        return {tid for tid, t in TITLES.items() if is_unlocked(t, u, room_level)}
+        user_id = u.get("user_id")
+        return {
+            tid for tid, title in TITLES.items()
+            if (
+                self.brain.db.has_item(user_id, title["shop_id"])
+                if title.get("price_sc") and title.get("shop_id")
+                else is_unlocked(title, u, room_level)
+            )
+        }
 
     def _describe_badge_effect(self, badge: dict, user_id: int) -> str:
-        """Показать эффект значка с учётом hard_effect."""
+        """Показать эффект медали с учётом hard_effect."""
         try:
             from item_system import get_badge_effects
             stats = self.brain.db.get_extended_stats(user_id)
@@ -48,10 +64,6 @@ class Inventory:
 
     async def cb_inv(self, query: CallbackQuery):
         user_id = query.from_user.id
-        u, room_level = self._ctx(user_id)
-
-        equipped = self.brain.db.get_user_badges_full(user_id)
-        title_name = self.brain.db.get_title(user_id)
 
         try:
             from item_system import get_total_effects
@@ -60,27 +72,29 @@ class Inventory:
             effects = {}
         effects_line = describe_effect_dict(effects)
 
-        badges_count = len(equipped)
-
         text = (
             "🎒 <b>Инвентарь</b>\n\n"
-            f"🏷 Титул: <b>{title_name}</b>\n"
-            f"🏅 Значков надето: <b>{badges_count}/5</b>\n\n"
             f"✨ <b>Активные эффекты:</b>\n<i>{effects_line}</i>\n\n"
             "Выбери раздел:"
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏅 Значки",  callback_data="inv_badges")],
-            [InlineKeyboardButton(text="🏷 Титулы",  callback_data="inv_titles")],
-            [InlineKeyboardButton(text="⬅️ Назад",  callback_data="menu")],
-        ])
+        sections = []
+        if BADGES:
+            sections.append(
+                [InlineKeyboardButton(text="🎖 Медали", callback_data="inv_badges")]
+            )
+        if TITLES:
+            sections.append(
+                [InlineKeyboardButton(text="🏷 Титулы", callback_data="inv_titles")]
+            )
+        sections.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+        kb = InlineKeyboardMarkup(inline_keyboard=sections)
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
         await query.answer()
 
-    # ---------- ЗНАЧКИ ----------
+    # ---------- МЕДАЛИ ----------
 
     async def cb_badges(self, query: CallbackQuery):
         user_id = query.from_user.id
@@ -89,7 +103,7 @@ class Inventory:
 
         if level < 5:
             text = (
-                "🏅 <b>Значки</b>\n\n"
+                "🎖 <b>Медали</b>\n\n"
                 "🔒 Доступно с <b>5 уровня</b>.\n"
                 f"Твой уровень: <b>{level}</b>"
             )
@@ -107,7 +121,7 @@ class Inventory:
         owned = self._owned_badges(u, room_level)
 
         lines = [
-            "🏅 <b>Значки — артефакты с баффами</b>\n",
+            "🎖 <b>Медали</b>\n",
             f"⭐ Уровень: <b>{level}</b>  •  Ячеек: <b>{total}/5</b>",
             f"🎖 Открыто: <b>{len(owned)}/{len(BADGES)}</b>\n",
         ]
@@ -123,7 +137,7 @@ class Inventory:
                     lines.append(f"{slot + 1}. {badge['name']} (HP: {hp_str})")
                     lines.append(f"     └ <i>{eff}</i>")
                 else:
-                    lines.append(f"{slot + 1}. <i>неизвестный значок</i>")
+                    lines.append(f"{slot + 1}. <i>неизвестная медаль</i>")
             else:
                 lines.append(f"{slot + 1}. <i>пусто</i>")
 
@@ -172,7 +186,7 @@ class Inventory:
         equipped = self.brain.db.get_user_badges_full(user_id)
 
         if not owned:
-            return await query.answer("Нет доступных значков", show_alert=True)
+            return await query.answer("Нет доступных медалей", show_alert=True)
 
         buttons = []
         current_bid = equipped.get(slot, {}).get("badge_id")
@@ -190,12 +204,12 @@ class Inventory:
 
         if current_bid:
             buttons.append([InlineKeyboardButton(
-                text="❌ Снять значок",
+                text="❌ Снять медаль",
                 callback_data=f"inv_badge_remove_{slot}"
             )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="inv_badges")])
 
-        # Описание выбранного значка (если есть)
+        # Описание выбранной медали (если есть)
         info_text = f"🏅 <b>Ячейка {slot + 1}</b>\n\n"
         if current_bid and current_bid in BADGES:
             badge = BADGES[current_bid]

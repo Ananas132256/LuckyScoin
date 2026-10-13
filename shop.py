@@ -13,7 +13,7 @@ RARITY_EMOJI = {
 
 CATEGORY_NAMES = {
     "title": "🏷 Титулы",
-    "badge": "🎖 Значки",
+    "badge": "🎖 Медали",
 }
 
 
@@ -45,12 +45,23 @@ class Shop:
         dp.callback_query(F.data.startswith("shop_cat_"))(self.cb_cat)
         dp.callback_query(F.data.startswith("shop_buy_"))(self.cb_buy)
 
-    def main_kb(self):
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏷 Титулы", callback_data="shop_cat_title")],
-            [InlineKeyboardButton(text="🎖 Значки", callback_data="shop_cat_badge")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-        ])
+    def main_kb(self, items):
+        categories = {item[4] for item in items}
+        buttons = [
+            [InlineKeyboardButton(
+                text=CATEGORY_NAMES.get(category, category),
+                callback_data=f"shop_cat_{category}"
+            )]
+            for category in ("title", "badge")
+            if category in categories
+        ]
+        buttons.extend(
+            [InlineKeyboardButton(text=CATEGORY_NAMES.get(category, category),
+                                  callback_data=f"shop_cat_{category}")]
+            for category in sorted(categories - {"title", "badge"})
+        )
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     async def cb_shop(self, query: CallbackQuery):
         if not SHOP_ENABLED:
@@ -76,6 +87,7 @@ class Shop:
         await safe_answer(query)
         user_id = query.from_user.id
         sc = self.brain.db.get_balance(user_id, "sc")
+        items = self.brain.db.get_shop_items()
 
         next_refresh = self.brain.db.get_shop_next_refresh()
         seconds_left = max(0, next_refresh - int(time.time()))
@@ -89,7 +101,9 @@ class Shop:
             f"Выбери категорию:"
         )
         try:
-            await query.message.edit_text(text, reply_markup=self.main_kb(), parse_mode="HTML")
+            await query.message.edit_text(
+                text, reply_markup=self.main_kb(items), parse_mode="HTML"
+            )
         except Exception:
             pass
 
@@ -128,7 +142,7 @@ class Shop:
         buttons = []
         for item_id, name, price, rarity, _ in items:
             owned = self.brain.db.has_item(user_id, item_id)
-            mark = " ✅" if owned > 0 else ""
+            mark = f" ✅ ×{owned}" if owned > 0 else ""
             lines.append(f"{RARITY_EMOJI.get(rarity, '⚪')} {name} — {price} SC{mark}")
             if owned == 0:
                 buttons.append([InlineKeyboardButton(

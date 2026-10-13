@@ -57,7 +57,7 @@ class DB:
                 xp INTEGER DEFAULT 0,
                 last_free_lc INTEGER DEFAULT 0,
                 layout TEXT DEFAULT 'classic',
-                title TEXT DEFAULT '🎲 Новичок',
+                title TEXT DEFAULT '',
                 streak INTEGER DEFAULT 0,
                 max_streak INTEGER DEFAULT 0,
                 total_bets INTEGER DEFAULT 0,
@@ -85,6 +85,19 @@ class DB:
                 quantity INTEGER DEFAULT 1,
                 PRIMARY KEY (user_id, item_id)
             )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_luck_items (
+                instance_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_id INTEGER NOT NULL,
+                uses_left INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        self.conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_luck_item_per_user
+            ON user_luck_items (user_id) WHERE active=1
         """)
 
         # ============ SHOP ============
@@ -149,6 +162,7 @@ class DB:
                 slot     INTEGER,
                 badge_id TEXT,
                 hp       INTEGER DEFAULT -1,
+                roll_count INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, slot)
             )
         """)
@@ -193,7 +207,7 @@ class DB:
             "xp":              "INTEGER DEFAULT 0",
             "last_free_lc":    "INTEGER DEFAULT 0",
             "layout":          "TEXT DEFAULT 'classic'",
-            "title":           "TEXT DEFAULT '🎲 Новичок'",
+            "title":           "TEXT DEFAULT ''",
             "streak":          "INTEGER DEFAULT 0",
             "max_streak":      "INTEGER DEFAULT 0",
             "total_bets":      "INTEGER DEFAULT 0",
@@ -223,31 +237,131 @@ class DB:
         badge_cols = {row[1] for row in cur.fetchall()}
         if "hp" not in badge_cols:
             self.conn.execute("ALTER TABLE user_badges ADD COLUMN hp INTEGER DEFAULT -1")
+        if "roll_count" not in badge_cols:
+            self.conn.execute(
+                "ALTER TABLE user_badges ADD COLUMN roll_count INTEGER DEFAULT 0"
+            )
 
     # ================= INIT ITEMS =================
 
     def _init_items(self):
-        default_items = [
-            (1,  "🍀 Клевер",         50,   "common",    "title"),
-            (2,  "💎 Бриллиант",      300,  "rare",      "title"),
-            (3,  "🔥 Огненный",       800,  "rare",      "title"),
-            (4,  "👑 Королевский",    2000, "epic",      "title"),
-            (5,  "🐋 Кит",            5000, "legendary", "title"),
-            (6,  "🎩 Лорд",           4000, "legendary", "title"),
-            (10, "⭐ Звёздочка",       100,  "common",    "badge"),
-            (11, "🌟 Суперзвезда",     500,  "rare",      "badge"),
-            (12, "🌌 Галактика",      3000, "epic",      "badge"),
-            (13, "🎲 Кубик",           150,  "common",    "badge"),
-            (14, "🃏 Джокер",          700,  "rare",      "badge"),
-            (15, "🏆 Трофей",          1200, "epic",      "badge"),
+        test_items = [
+            (1, "🍀 Клевер"),
+            (2, "💎 Бриллиант"),
+            (3, "🔥 Огненный"),
+            (4, "👑 Королевский"),
+            (5, "🐋 Кит"),
+            (6, "🎩 Лорд"),
+            (10, "⭐ Звёздочка"),
+            (11, "🌟 Суперзвезда"),
+            (12, "🌌 Галактика"),
+            (13, "🎲 Кубик"),
+            (14, "🃏 Джокер"),
+            (15, "🏆 Трофей"),
         ]
-        for item in default_items:
+
+        for item_id, name in test_items:
             self.conn.execute(
-                "INSERT OR IGNORE INTO items (item_id, name, price_sc, rarity, category) "
-                "VALUES (?, ?, ?, ?, ?)",
-                item
+                "DELETE FROM shop_stock WHERE item_id=? "
+                "AND EXISTS (SELECT 1 FROM items WHERE item_id=? AND name=?)",
+                (item_id, item_id, name)
             )
+            self.conn.execute(
+                "DELETE FROM items WHERE item_id=? AND name=?",
+                (item_id, name)
+            )
+
+        from cosmetics import ITEMS, BADGES, TITLES
+        for item in ITEMS.values():
+            self.conn.execute(
+                "INSERT INTO items (item_id, name, price_sc, rarity, category) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(item_id) DO UPDATE SET "
+                "name=excluded.name, price_sc=excluded.price_sc, "
+                "rarity=excluded.rarity, category=excluded.category",
+                (
+                    item["shop_id"], item["name"], item.get("price_sc", 0),
+                    item["rarity"], "badge"
+                )
+            )
+
+        current_badge_ids = set(BADGES)
+        current_cosmetic_item_ids = {
+            item["shop_id"] for item in ITEMS.values()
+        } | {
+            cosmetic["shop_id"]
+            for cosmetic in TITLES.values()
+            if isinstance(cosmetic.get("shop_id"), int)
+        }
+        if not TITLES:
+            self.conn.execute("UPDATE users SET title=''")
+        old_cosmetic_rows = self.conn.execute(
+            "SELECT item_id FROM items"
+        ).fetchall()
+        removed_cosmetic_ids = [
+            row[0] for row in old_cosmetic_rows
+            if row[0] not in current_cosmetic_item_ids
+        ]
+        if removed_cosmetic_ids:
+            placeholders = ",".join("?" for _ in removed_cosmetic_ids)
+            self.conn.execute(
+                f"DELETE FROM inventory WHERE item_id IN ({placeholders})",
+                removed_cosmetic_ids
+            )
+            self.conn.execute(
+                f"DELETE FROM items WHERE item_id IN ({placeholders})",
+                removed_cosmetic_ids
+            )
+        for (badge_id,) in self.conn.execute(
+            "SELECT DISTINCT badge_id FROM user_badges"
+        ).fetchall():
+            if badge_id not in current_badge_ids:
+                self.conn.execute(
+                    "DELETE FROM user_badges WHERE badge_id=?", (badge_id,)
+                )
+        item_id_placeholders = ",".join("?" for _ in current_cosmetic_item_ids)
+        self.conn.execute(
+            f"""
+            INSERT INTO inventory (user_id, item_id, quantity)
+            SELECT user_id, item_id, 1
+            FROM user_luck_items
+            WHERE item_id IN ({item_id_placeholders})
+            GROUP BY user_id, item_id
+            ON CONFLICT(user_id, item_id) DO UPDATE SET quantity=MAX(quantity, 1)
+            """,
+            tuple(current_cosmetic_item_ids)
+        )
+        self.conn.execute("DELETE FROM user_luck_items")
+        for category, cosmetics in (("title", TITLES),):
+            for cosmetic in cosmetics.values():
+                price = cosmetic.get("price_sc")
+                item_id = cosmetic.get("shop_id")
+                if not isinstance(price, int) or price <= 0 or not item_id:
+                    continue
+                self.conn.execute(
+                    "INSERT INTO items (item_id, name, price_sc, rarity, category) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(item_id) DO UPDATE SET "
+                    "name=excluded.name, price_sc=excluded.price_sc, "
+                    "rarity=excluded.rarity, category=excluded.category",
+                    (item_id, cosmetic["name"], price, cosmetic["rarity"], category)
+                )
+        self.conn.execute("DELETE FROM shop_stock")
+        self.conn.execute("UPDATE shop_meta SET next_refresh=0 WHERE id=1")
         self.conn.commit()
+
+    @staticmethod
+    def _purchasable_cosmetic_ids():
+        from cosmetics import BADGES, TITLES
+
+        return {
+            cosmetic["shop_id"]
+            for cosmetic in (*BADGES.values(), *TITLES.values())
+            if isinstance(cosmetic.get("shop_id"), int)
+            and cosmetic["shop_id"] > 0
+            and isinstance(cosmetic.get("price_sc"), int)
+            and cosmetic["price_sc"] > 0
+        }
 
     def _ensure(self, user_id):
         self.conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
@@ -372,7 +486,7 @@ class DB:
     def get_title(self, user_id):
         self._ensure(user_id)
         cur = self.conn.execute("SELECT title FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0] or "🎲 Новичок"
+        return cur.fetchone()[0] or ""
 
     def set_title(self, user_id, title):
         self._ensure(user_id)
@@ -432,6 +546,13 @@ class DB:
         return {"item_id": row[0], "name": row[1], "price_sc": row[2], "rarity": row[3], "category": row[4]}
 
     def has_item(self, user_id, item_id):
+        item = self.get_item(item_id)
+        if item and item["category"] == "luck_item":
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM user_luck_items WHERE user_id=? AND item_id=?",
+                (user_id, item_id)
+            )
+            return cur.fetchone()[0]
         cur = self.conn.execute(
             "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
             (user_id, item_id)
@@ -476,12 +597,18 @@ class DB:
         return cur.fetchall()
 
     def buy_item(self, user_id, item_id):
+        cur = self.conn.execute(
+            "SELECT 1 FROM shop_stock WHERE item_id=?", (item_id,)
+        )
+        if not cur.fetchone():
+            return False, "❌ Этого товара сейчас нет в магазине"
         item = self.get_item(item_id)
         if not item:
             return False, "❌ Предмет не найден"
         sc = self.get_balance(user_id, "sc")
         if sc < item["price_sc"]:
             return False, f"❌ Нужно {item['price_sc']} SC, у тебя {sc}"
+
         if self.has_item(user_id, item_id) > 0:
             return False, "❌ У тебя уже есть этот предмет"
         self.add_balance(user_id, "sc", -item["price_sc"])
@@ -490,10 +617,105 @@ class DB:
             self.set_title(user_id, item["name"])
         return True, f"✅ Куплено: {item['name']} за {item['price_sc']} SC"
 
+    def get_luck_items(self, user_id):
+        cur = self.conn.execute("""
+            SELECT user_luck_items.instance_id, user_luck_items.item_id,
+                   items.name, items.rarity, user_luck_items.uses_left,
+                   user_luck_items.active
+            FROM user_luck_items
+            JOIN items ON user_luck_items.item_id = items.item_id
+            WHERE user_luck_items.user_id=?
+            ORDER BY user_luck_items.instance_id
+        """, (user_id,))
+        return cur.fetchall()
+
+    def activate_luck_item(self, user_id, instance_id):
+        cur = self.conn.execute(
+            "SELECT 1 FROM user_luck_items WHERE user_id=? AND instance_id=?",
+            (user_id, instance_id)
+        )
+        if not cur.fetchone():
+            return False
+        self.conn.execute(
+            "UPDATE user_luck_items SET active=0 WHERE user_id=? AND active=1",
+            (user_id,)
+        )
+        self.conn.execute(
+            "UPDATE user_luck_items SET active=1 WHERE user_id=? AND instance_id=?",
+            (user_id, instance_id)
+        )
+        self.conn.commit()
+        return True
+
+    def deactivate_luck_item(self, user_id):
+        self.conn.execute(
+            "UPDATE user_luck_items SET active=0 WHERE user_id=? AND active=1",
+            (user_id,)
+        )
+        self.conn.commit()
+
+    def get_active_luck_item(self, user_id):
+        cur = self.conn.execute(
+            "SELECT item_id FROM user_luck_items WHERE user_id=? AND active=1",
+            (user_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def consume_active_luck_item(self, user_id):
+        cur = self.conn.execute("""
+            SELECT user_luck_items.instance_id, user_luck_items.item_id,
+                   user_luck_items.uses_left, items.name
+            FROM user_luck_items
+            JOIN items ON user_luck_items.item_id = items.item_id
+            WHERE user_luck_items.user_id=? AND user_luck_items.active=1
+        """, (user_id,))
+        row = cur.fetchone()
+        if not row or row[2] == -1:
+            return None
+
+        instance_id, item_id, uses_left, name = row
+        uses_left -= 1
+        if uses_left > 0:
+            self.conn.execute(
+                "UPDATE user_luck_items SET uses_left=? WHERE instance_id=?",
+                (uses_left, instance_id)
+            )
+            self.conn.commit()
+            return None
+
+        from item import ITEMS
+        definition = next(
+            (value for value in ITEMS.values() if value["shop_id"] == item_id),
+            None
+        )
+        replacement_id = None
+        if definition and definition.get("after_break"):
+            replacement = ITEMS[definition["after_break"]]
+            replacement_id = replacement["shop_id"]
+
+        self.conn.execute(
+            "DELETE FROM user_luck_items WHERE instance_id=?",
+            (instance_id,)
+        )
+        if replacement_id is not None:
+            replacement = ITEMS[definition["after_break"]]
+            self.conn.execute(
+                "INSERT INTO user_luck_items (user_id, item_id, uses_left) VALUES (?, ?, ?)",
+                (user_id, replacement_id, replacement["uses"])
+            )
+        self.conn.commit()
+
+        if replacement_id is not None:
+            replacement_name = ITEMS[definition["after_break"]]["name"]
+            return f"💔 <b>{name}</b> закончился! Получен <b>{replacement_name}</b>."
+        return f"💔 <b>{name}</b> закончился."
+
     def get_shop_items(self):
         now = int(time.time())
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
         next_refresh = cur.fetchone()[0]
+        purchasable_cosmetics = self._purchasable_cosmetic_ids()
         if now >= next_refresh:
             cur = self.conn.execute("SELECT DISTINCT category FROM items")
             categories = [r[0] for r in cur.fetchall()]
@@ -501,8 +723,14 @@ class DB:
             for cat in categories:
                 cur = self.conn.execute("SELECT item_id FROM items WHERE category=?", (cat,))
                 ids = [r[0] for r in cur.fetchall()]
-                random.shuffle(ids)
-                selected.extend(ids[:self.SHOP_PER_CATEGORY])
+                if cat in ("badge", "title"):
+                    selected.extend(
+                        item_id for item_id in ids
+                        if item_id in purchasable_cosmetics
+                    )
+                else:
+                    random.shuffle(ids)
+                    selected.extend(ids[:self.SHOP_PER_CATEGORY])
             self.conn.execute("DELETE FROM shop_stock")
             for iid in selected:
                 self.conn.execute("INSERT INTO shop_stock (item_id) VALUES (?)", (iid,))
@@ -517,7 +745,11 @@ class DB:
             JOIN items ON shop_stock.item_id = items.item_id
             ORDER BY items.category, items.price_sc
         """)
-        return cur.fetchall()
+        return [
+            row for row in cur.fetchall()
+            if row[4] not in ("badge", "title")
+            or row[0] in purchasable_cosmetics
+        ]
 
     def get_shop_next_refresh(self):
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
@@ -895,11 +1127,15 @@ class DB:
     def get_user_badges_full(self, user_id):
         result = {}
         cur = self.conn.execute(
-            "SELECT slot, badge_id, hp FROM user_badges WHERE user_id=?",
+            "SELECT slot, badge_id, hp, roll_count FROM user_badges WHERE user_id=?",
             (user_id,)
         )
-        for slot, bid, hp in cur.fetchall():
-            result[slot] = {"badge_id": bid, "hp": hp}
+        for slot, bid, hp, roll_count in cur.fetchall():
+            result[slot] = {
+                "badge_id": bid,
+                "hp": hp,
+                "roll_count": roll_count,
+            }
         return result
 
     def set_user_badge(self, user_id, slot, badge_id):
@@ -909,9 +1145,35 @@ class DB:
         if hp == "inf":
             hp = -1
         self.conn.execute(
-            "INSERT INTO user_badges (user_id, slot, badge_id, hp) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(user_id, slot) DO UPDATE SET badge_id=excluded.badge_id, hp=excluded.hp",
+            "INSERT INTO user_badges (user_id, slot, badge_id, hp, roll_count) "
+            "VALUES (?, ?, ?, ?, 0) "
+            "ON CONFLICT(user_id, slot) DO UPDATE SET "
+            "roll_count=CASE WHEN badge_id != excluded.badge_id "
+            "THEN 0 ELSE roll_count END, "
+            "badge_id=excluded.badge_id, hp=excluded.hp",
             (user_id, slot, badge_id, hp)
+        )
+        self.conn.commit()
+
+    def increment_badge_rolls(self, user_id):
+        self.conn.execute(
+            "UPDATE user_badges SET roll_count=roll_count+1 WHERE user_id=?",
+            (user_id,)
+        )
+        self.conn.commit()
+
+    def get_badge_roll_count(self, user_id, slot):
+        cur = self.conn.execute(
+            "SELECT roll_count FROM user_badges WHERE user_id=? AND slot=?",
+            (user_id, slot)
+        )
+        row = cur.fetchone()
+        return row[0] if row else 0
+
+    def reset_badge_roll_count(self, user_id, slot):
+        self.conn.execute(
+            "UPDATE user_badges SET roll_count=0 WHERE user_id=? AND slot=?",
+            (user_id, slot)
         )
         self.conn.commit()
 

@@ -58,7 +58,7 @@ class Admin:
         dp.message(Command("setxp"))(self.cmd_setxp)
         dp.message(Command("userinfo"))(self.cmd_userinfo)
 
-        # значки
+        # медали
         dp.message(Command("givebadge"))(self.cmd_givebadge)
         dp.message(Command("removebadge"))(self.cmd_removebadge)
         dp.message(Command("listbadges"))(self.cmd_listbadges)
@@ -183,7 +183,7 @@ class Admin:
             "<code>/setlevel &lt;id|@user&gt; &lt;level&gt;</code>\n"
             "<code>/setxp &lt;id|@user&gt; &lt;xp&gt;</code>\n"
             "<code>/userinfo &lt;id|@user&gt;</code>\n\n"
-            "<b>Значки:</b>\n"
+            "<b>Медали:</b>\n"
             "<code>/givebadge &lt;id|@user&gt; &lt;badge&gt;</code>\n"
             "<code>/removebadge &lt;id|@user&gt; &lt;slot|all&gt;</code>\n"
             "<code>/listbadges</code> — список ID\n"
@@ -211,7 +211,7 @@ class Admin:
             "• <code>/userinfo</code> — всё о юзере\n"
             "• <code>/compensate</code> — начислить всем\n"
             "• <code>/broadcast</code> — рассылка\n\n"
-            "<b>Значки:</b>\n"
+            "<b>Медали:</b>\n"
             "• <code>/givebadge</code>, <code>/removebadge</code>\n"
             "• <code>/listbadges</code>, <code>/clearbadges</code>\n\n"
             "<b>Админы:</b>\n"
@@ -393,7 +393,7 @@ class Admin:
                         hp_str = "∞" if hp == -1 else str(hp)
                         names.append(f"{badge['name']} [{hp_str}]")
                 if names:
-                    badges_line = "🏅 Значки: " + " • ".join(names) + "\n"
+                    badges_line = "🎖 Медали: " + " • ".join(names) + "\n"
         except Exception:
             pass
 
@@ -403,10 +403,11 @@ class Admin:
         elif self.brain.db.is_db_admin(target_id):
             admin_marker = " 👑 <i>(админ)</i>"
 
+        title_line = f"🏷 Титул: {u['title']}\n" if u["title"] else ""
         text = (
             f"👤 <b>Юзер</b> <code>{target_id}</code>{admin_marker}\n"
             f"Ник: @{u['username']}\n"
-            f"🏷 Титул: {u['title']}\n"
+            f"{title_line}"
             f"{badges_line}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
             f"💰 SC: {u['sc']}\n"
@@ -419,7 +420,7 @@ class Admin:
         )
         await message.answer(text, parse_mode="HTML")
 
-    # ================= ЗНАЧКИ =================
+    # ================= МЕДАЛИ =================
 
     async def cmd_givebadge(self, message: Message):
         if not self._check(message):
@@ -440,7 +441,7 @@ class Admin:
 
         if badge_id not in BADGES:
             return await message.answer(
-                f"❌ Значок <code>{badge_id}</code> не найден. Список: /listbadges",
+                f"❌ Медаль <code>{badge_id}</code> не найдена. Список: /listbadges",
                 parse_mode="HTML"
             )
 
@@ -460,7 +461,7 @@ class Admin:
         self.brain.db.set_user_badge(target_id, free_slot, badge_id)
         badge = BADGES[badge_id]
         await message.answer(
-            f"✅ Значок <b>{badge['name']}</b> выдан юзеру <code>{target_id}</code>\n"
+            f"✅ Медаль <b>{badge['name']}</b> выдана юзеру <code>{target_id}</code>\n"
             f"Слот: <b>{free_slot + 1}</b>",
             parse_mode="HTML"
         )
@@ -505,7 +506,7 @@ class Admin:
         if not self._check(message):
             return
         self._log(message)
-        lines = ["🏅 <b>Все значки</b>\n"]
+        lines = ["🎖 <b>Все медали</b>\n"]
         for bid, b in BADGES.items():
             hp = b.get("hp", "inf")
             hp_str = "∞" if hp == "inf" else str(hp)
@@ -522,7 +523,7 @@ class Admin:
         self._log(message)
         self.brain.db.conn.execute("DELETE FROM user_badges")
         self.brain.db.conn.commit()
-        await message.answer("✅ Все значки у всех игроков удалены.")
+        await message.answer("✅ Все медали у всех игроков удалены.")
 
     # ================= АДМИНЫ =================
 

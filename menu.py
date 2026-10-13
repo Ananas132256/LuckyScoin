@@ -175,9 +175,10 @@ class Menu:
         filled = max(0, min(10, int(u["xp"] / xp_needed * 10)))
         bar = "▰" * filled + "▱" * (10 - filled)
         percent = int(u["xp"] / xp_needed * 100)
+        title = f"  •  🏷 {u['title']}" if u["title"] else ""
         text = (
             f"🎰 <b>LuckyScoin</b>\n\n"
-            f"👤 @{u['username']}  •  🏷 {u['title']}\n"
+            f"👤 @{u['username']}{title}\n"
             f"⭐ Ур. <b>{u['level']}</b>\n"
             f"<code>{bar}</code> {percent}%\n"
             f"XP: {u['xp']}/{xp_needed}\n\n"
@@ -238,13 +239,14 @@ class Menu:
             equipped = self.brain.db.get_user_badges(user_id)
             names = [BADGES[bid]["name"] for bid in equipped.values() if bid and bid in BADGES]
             if names:
-                badges_block = "\n🏅 " + " • ".join(names) + "\n"
+                badges_block = "\n🎖 " + " • ".join(names) + "\n"
         except Exception:
             pass
 
+        title_line = f"🏷 {u['title']}\n" if u["title"] else ""
         text = (
             f"👤 @{u['username']}\n"
-            f"🏷 {u['title']}\n"
+            f"{title_line}"
             f"{badges_block}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
             f"💰 SC: {u['sc']}\n"

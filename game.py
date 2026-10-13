@@ -421,6 +421,7 @@ class Game:
         msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
                                    parse_mode="HTML")
 
+        self.brain.db.increment_badge_rolls(user_id)
         total_mult, is_item, symbols, rerolls, effects, any_burn = await self._resolve(
             msg, name, bet, spin_key, user_id
         )

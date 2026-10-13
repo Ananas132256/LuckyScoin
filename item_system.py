@@ -1,5 +1,5 @@
 """
-Парсер эффектов значков.
+Парсер эффектов медалей.
 EFFECT: "set.переменная = значение"  или  "give.переменная = значение"
 HARD_EFFECT: список блоков с if/elif/else
 """
@@ -48,7 +48,14 @@ def _eval_part(part: str, stats: dict) -> bool:
         if op in part:
             left, right = part.split(op, 1)
             left, right = left.strip(), right.strip()
-            left_val = stats.get(left, 0)
+            if "%" in left:
+                stat_name, divisor = left.split("%", 1)
+                try:
+                    left_val = float(stats.get(stat_name.strip(), 0)) % float(divisor)
+                except (ValueError, TypeError, ZeroDivisionError):
+                    return False
+            else:
+                left_val = stats.get(left, 0)
             try:
                 if right.replace(".", "", 1).lstrip("-").isdigit():
                     right_val = float(right) if "." in right else int(right)
@@ -113,8 +120,9 @@ def apply_effects(effect_strings, effects: dict):
             effects[var] = effects.get(var, 0) + val
 
 
-def get_badge_effects(badge: dict, stats: dict) -> dict:
-    """Эффекты одного значка (effect + hard_effect)."""
+def get_badge_effects(badge: dict, stats: dict, roll_count: int = 0) -> dict:
+    """Эффекты одной медали (effect + hard_effect)."""
+    stats = {**stats, "badge_roll_count": roll_count}
     effects = {}
     if badge.get("effect"):
         apply_effects([badge["effect"]], effects)
@@ -136,22 +144,30 @@ def get_badge_effects(badge: dict, stats: dict) -> dict:
 
 
 def get_total_effects(brain, user_id: int) -> dict:
-    """Все эффекты от значков."""
+    """Все эффекты от надетых медалей."""
     from cosmetics import BADGES
 
     stats = brain.db.get_extended_stats(user_id)
     effects = {}
 
-    for bid in brain.db.get_user_badges(user_id).values():
+    for slot, bid in brain.db.get_user_badges(user_id).items():
         if bid and bid in BADGES:
-            badge_eff = get_badge_effects(BADGES[bid], stats)
+            roll_count = brain.db.get_badge_roll_count(user_id, slot)
+            badge_eff = get_badge_effects(BADGES[bid], stats, roll_count)
             for k, v in badge_eff.items():
                 effects[k] = effects.get(k, 0) + v
+
+    for effect_name in ("luck", "mult_bonus", "xp_bonus"):
+        multiplier_name = f"{effect_name}_mult"
+        if multiplier_name in effects:
+            effects[effect_name] = effects.get(effect_name, 0) * effects.pop(
+                multiplier_name
+            )
 
     return effects
 
 
-# ---------- ПОЛОМКА ЗНАЧКОВ ----------
+# ---------- ПОЛОМКА МЕДАЛЕЙ ----------
 
 def should_break(badge: dict, trigger: str) -> bool:
     if badge.get("hp") == "inf":
@@ -182,7 +198,7 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_ITEM":
         new_id = after.get("item_id")
         if new_id and new_id in BADGES:
-            # Новый значок попадает в первый свободный слот
+            # Новая медаль занимает первый свободный слот.
             equipped = brain.db.get_user_badges(user_id)
             free_slot = None
             for i in range(5):

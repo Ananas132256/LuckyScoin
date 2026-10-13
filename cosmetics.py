@@ -1,273 +1,90 @@
-"""
-ЗНАЧКИ (артефакты) и ТИТУЛЫ.
+"""Каталог игровых предметов-медалей и титулов.
 
-ЗНАЧКИ — дают эффекты, надеваются в ячейки, могут сломаться.
-ТИТУЛЫ — просто надпись.
-
-Структура значка:
-    name         — название с эмодзи
-    desc         — короткое описание
-    rarity       — common / rare / epic / legendary
-    unlock       — условие открытия (см. is_unlocked)
-    hp           — сколько спинов живёт ("inf" = вечный)
-    break_on     — когда может сломаться: ["roll"], ["win"], ["loss"]
-    break_chance — шанс поломки при триггере (0.05 = 5%)
-    effect       — строка: "set.mult_bonus = 0.05" или "give.user_sc = 1000"
-    hard_effect  — список условий (см. ниже)
-    after_break  — {"type": "NOTHING"} / {"type": "GET_SC", "amount": 100} / ...
-
-Формат EFFECT:
-    "set.переменная = значение"    — установить
-    "give.переменная = значение"   — прибавить
-
-HARD_EFFECT:
-    [
-        {"if": "user_level >= 50",   "then": "set.mult_bonus = 0.20"},
-        {"elif": "user_level >= 25", "then": "set.mult_bonus = 0.15"},
-        {"else": "set.mult_bonus = 0.10"},
-    ]
-    Операторы: >=, <=, !=, =, >, <, !
-    | = ИЛИ, # = И
-
-Переменные (см. db.get_extended_stats):
-    user_level, user_sc, user_lc, user_games, user_wins, user_losses, user_xp,
-    user_streak, user_max_streak, user_winrate, user_total_bets, user_total_won,
-    user_total_lost, casino_level, casino_rooms, casino_staff, casino_income,
-    badges_count, badges_legendary, hour_of_day, day_of_week
+Добавляй новые медали в ITEMS: укажи уникальный shop_id,
+price_sc, name, desc, rarity, hp и эффекты. hp="inf" задаёт вечную медаль.
 """
 
-
-# ============================================================
-#  ЗНАЧКИ (артефакты с баффами + HP)
-# ============================================================
-
-BADGES = {
-    "rookie": {
-        "name": "🎲 Новичок",
-        "desc": "Просто для красоты",
+ITEMS = {
+    "leaf": {
+        "shop_id": 21,
+        "name": "🍃 Листочек",
+        "desc": "+5% удачи, бесконечное число использований",
         "rarity": "common",
-        "unlock": {},
+        "price_sc": 10,
         "hp": "inf",
         "break_on": [],
         "break_chance": 0,
-        "effect": "",
+        "effect": "set.luck = 0.05",
         "hard_effect": [],
         "after_break": {"type": "NOTHING"},
     },
-    "lucky": {
-        "name": "🍀 Везунчик",
-        "desc": "+5% к множителю",
+    "three_leaf_clover": {
+        "shop_id": 22,
+        "name": "☘️ Трёхлистный клевер",
+        "desc": "+5% удачи; +15%, если предыдущий ролл был выигрышным. 100 спинов",
         "rarity": "common",
-        "unlock": {"level": 5},
+        "price_sc": 75,
         "hp": 100,
-        "break_on": ["loss"],
-        "break_chance": 0.02,
-        "effect": "set.mult_bonus = 0.05",
-        "hard_effect": [],
-        "after_break": {"type": "NOTHING"},
-    },
-    "hard_worker": {
-        "name": "⛏️ Старатель",
-        "desc": "+15% XP",
-        "rarity": "common",
-        "unlock": {"level": 10},
-        "hp": 150,
-        "break_on": ["roll"],
-        "break_chance": 0.02,
-        "effect": "set.xp_bonus = 0.15",
-        "hard_effect": [],
-        "after_break": {"type": "GET_SC", "amount": 100},
-    },
-    "bomb_defuser": {
-        "name": "🛡 Сапёр",
-        "desc": "-40% урона от бомб 💣",
-        "rarity": "rare",
-        "unlock": {"level": 15},
-        "hp": 120,
-        "break_on": ["loss"],
-        "break_chance": 0.03,
-        "effect": "set.bomb_shield = 0.40",
-        "hard_effect": [],
-        "after_break": {"type": "GET_SC", "amount": 500},
-    },
-    "lucky_pro": {
-        "name": "🍀 Про-везение",
-        "desc": "+12% к множителю",
-        "rarity": "rare",
-        "unlock": {"level": 25},
-        "hp": 150,
-        "break_on": ["loss"],
-        "break_chance": 0.03,
-        "effect": "set.mult_bonus = 0.12",
-        "hard_effect": [],
-        "after_break": {"type": "GET_LC", "amount": 100},
-    },
-    "streak_master": {
-        "name": "🔥 На волне",
-        "desc": "Растёт при серии побед",
-        "rarity": "epic",
-        "unlock": {"level": 30},
-        "hp": 200,
-        "break_on": ["loss"],
-        "break_chance": 0.04,
-        "effect": "set.mult_bonus = 0.05",
-        "hard_effect": [
-            {"if": "user_streak >= 10", "then": "set.mult_bonus = 0.30"},
-            {"elif": "user_streak >= 5", "then": "set.mult_bonus = 0.20"},
-            {"elif": "user_streak >= 3", "then": "set.mult_bonus = 0.10"},
-        ],
-        "after_break": {"type": "GET_ITEM", "item_id": "lucky_pro"},
-    },
-    "night_owl": {
-        "name": "🦉 Ночная сова",
-        "desc": "Ночью удача выше",
-        "rarity": "epic",
-        "unlock": {"level": 40},
-        "hp": 180,
-        "break_on": ["roll"],
-        "break_chance": 0.02,
+        "break_on": [],
+        "break_chance": 0,
         "effect": "set.luck = 0.05",
         "hard_effect": [
-            {"if": "hour_of_day >= 0 # hour_of_day <= 6", "then": "set.luck = 0.25"},
+            {"if": "user_streak >= 1", "then": "set.luck = 0.15"},
         ],
-        "after_break": {"type": "GET_LC", "amount": 200},
+        "after_break": {"type": "GET_ITEM", "item_id": "leaf"},
     },
-    "tycoon": {
-        "name": "🏢 Магнат",
-        "desc": "Бонус за развитое казино",
-        "rarity": "epic",
-        "unlock": {"room_level": 5},
-        "hp": 250,
-        "break_on": ["loss"],
-        "break_chance": 0.02,
-        "effect": "set.mult_bonus = 0.08",
+    "four_leaf_clover": {
+        "shop_id": 23,
+        "name": "🍀 Четырёхлистный клевер",
+        "desc": "+15% удачи; +30%, если предыдущий ролл был выигрышным. 100 спинов",
+        "rarity": "rare",
+        "price_sc": 200,
+        "hp": 100,
+        "break_on": [],
+        "break_chance": 0,
+        "effect": "set.luck = 0.15",
         "hard_effect": [
-            {"if": "casino_level >= 8", "then": "set.mult_bonus = 0.20"},
-            {"if": "casino_rooms >= 7", "then": "set.xp_bonus = 0.10"},
+            {"if": "user_streak >= 1", "then": "set.luck = 0.30"},
         ],
-        "after_break": {"type": "GET_ITEM", "item_id": "golden_ring"},
+        "after_break": {"type": "GET_ITEM", "item_id": "three_leaf_clover"},
     },
-    "golden_ring": {
-        "name": "💛 Золотое кольцо",
-        "desc": "+15% к множителю",
-        "rarity": "epic",
-        "unlock": {"level": 55},
-        "hp": 300,
-        "break_on": ["loss"],
+    "d6_full": {
+        "shop_id": 24,
+        "name": "🎲 D6 (целый)",
+        "desc": "Каждый 6-й рол: удача ×3. 50 использований.",
+        "rarity": "rare",
+        "unlock": {},
+        "price_sc": 230,
+        "hp": 50,
+        "break_on": ["roll"],
         "break_chance": 0.02,
-        "effect": "set.mult_bonus = 0.15",
+        "effect": "set.luck = 0.10",
         "hard_effect": [
-            {"if": "user_level >= 80 # casino_level >= 7", "then": "set.mult_bonus = 0.25"},
+            {
+                "if": "badge_roll_count > 0 # badge_roll_count % 6 = 0",
+                "then": "set.luck_mult = 3",
+            },
         ],
-        "after_break": {"type": "GET_ITEM", "item_id": "lucky_pro"},
+        "after_break": {"type": "GET_ITEM", "item_id": "d6_shard"},
     },
-    "legend": {
-        "name": "👑 Легенда",
-        "desc": "+20% к множителю",
-        "rarity": "legendary",
-        "unlock": {"level": 70},
-        "hp": 500,
-        "break_on": ["loss"],
-        "break_chance": 0.01,
-        "effect": "set.mult_bonus = 0.20",
-        "hard_effect": [],
-        "after_break": {"type": "GET_ITEM", "item_id": "golden_ring"},
-    },
-    "phoenix": {
-        "name": "🔥 Перо феникса",
-        "desc": "Вечный: +25% к множителю",
-        "rarity": "legendary",
-        "unlock": {"level": 100},
+    "d6_shard": {
+        "shop_id": 25,
+        "name": "🎲 Обломок D6",
+        "desc": "Осколок сломанного D6. +3% удачи.",
+        "rarity": "common",
+        "unlock": {},
         "hp": "inf",
         "break_on": [],
         "break_chance": 0,
-        "effect": "set.mult_bonus = 0.25",
-        "hard_effect": [
-            {"if": "user_level >= 150", "then": "set.mult_bonus = 0.40"},
-            {"if": "user_sc >= 100000", "then": "set.xp_bonus = 0.30"},
-        ],
+        "effect": "set.luck = 0.03",
+        "hard_effect": [],
         "after_break": {"type": "NOTHING"},
     },
-    "whale": {
-        "name": "🐋 Кит",
-        "desc": "+25% к множителю и защита от бомб",
-        "rarity": "legendary",
-        "unlock": {"sc": 50000},
-        "hp": 400,
-        "break_on": ["loss"],
-        "break_chance": 0.01,
-        "effect": "set.mult_bonus = 0.25",
-        "hard_effect": [
-            {"if": "badges_legendary >= 2", "then": "set.mult_bonus = 0.40"},
-        ],
-        "after_break": {"type": "GET_ITEM", "item_id": "legend"},
-    },
-    # -------- ПРИМЕР для добавления --------
-    # "collector": {
-    #     "name": "🎖 Коллекционер",
-    #     "desc": "+15% XP и +5% к множителю",
-    #     "rarity": "epic",
-    #     "unlock": {"level": 75},
-    #     "hp": 300,
-    #     "break_on": ["roll"],
-    #     "break_chance": 0.02,
-    #     "effect": "set.mult_bonus = 0.05",
-    #     "hard_effect": [
-    #         {"if": "user_level >= 100", "then": "set.xp_bonus = 0.15"},
-    #     ],
-    #     "after_break": {"type": "GET_SC", "amount": 2000},
-    # },
 }
 
-
-# ============================================================
-#  ТИТУЛЫ (просто надпись)
-# ============================================================
-
-TITLES = {
-    "newbie": {
-        "name": "🎲 Новичок",
-        "desc": "Стартовый титул",
-        "rarity": "common",
-        "unlock": {},
-    },
-    "lucky": {
-        "name": "🍀 Везунчик",
-        "desc": "С 5 уровня",
-        "rarity": "common",
-        "unlock": {"level": 5},
-    },
-    "rich": {
-        "name": "💎 Богач",
-        "desc": "С 25 уровня",
-        "rarity": "rare",
-        "unlock": {"level": 25},
-    },
-    "high_roller": {
-        "name": "🔥 Хайроллер",
-        "desc": "С 50 уровня",
-        "rarity": "epic",
-        "unlock": {"level": 50},
-    },
-    "legend": {
-        "name": "👑 Легенда",
-        "desc": "С 100 уровня",
-        "rarity": "legendary",
-        "unlock": {"level": 100},
-    },
-    "tycoon": {
-        "name": "🏢 Магнат",
-        "desc": "Открой 5 залов в своём казино",
-        "rarity": "epic",
-        "unlock": {"room_level": 5},
-    },
-    "whale": {
-        "name": "🐋 Кит",
-        "desc": "Накопи 100 000 SC",
-        "rarity": "legendary",
-        "unlock": {"sc": 100000},
-    },
-}
+# Обратное имя для существующего кода экипировки: медали являются предметами.
+BADGES = ITEMS
+TITLES = {}
 
 
 # ============================================================
