@@ -689,25 +689,31 @@ class DB:
             (value for value in ITEMS.values() if value["shop_id"] == item_id),
             None
         )
+        after = definition.get("after_break") or {}
         replacement_id = None
-        if definition and definition.get("after_break"):
-            replacement = ITEMS[definition["after_break"]]
-            replacement_id = replacement["shop_id"]
+        replacement_def = None
+        if after.get("type") == "GET_ITEM":
+            replacement_key = after.get("item_id")
+            replacement_def = ITEMS.get(replacement_key)
+            if replacement_def:
+                replacement_id = replacement_def["shop_id"]
 
         self.conn.execute(
             "DELETE FROM user_luck_items WHERE instance_id=?",
             (instance_id,)
         )
-        if replacement_id is not None:
-            replacement = ITEMS[definition["after_break"]]
+        if replacement_id is not None and replacement_def is not None:
+            uses = replacement_def.get("hp", 1)
+            if uses == "inf":
+                uses = -1
             self.conn.execute(
                 "INSERT INTO user_luck_items (user_id, item_id, uses_left) VALUES (?, ?, ?)",
-                (user_id, replacement_id, replacement["uses"])
+                (user_id, replacement_id, uses)
             )
         self.conn.commit()
 
-        if replacement_id is not None:
-            replacement_name = ITEMS[definition["after_break"]]["name"]
+        if replacement_id is not None and replacement_def is not None:
+            replacement_name = replacement_def["name"]
             return f"💔 <b>{name}</b> закончился! Получен <b>{replacement_name}</b>."
         return f"💔 <b>{name}</b> закончился."
 
