@@ -70,6 +70,19 @@ class Game:
     LEVEL_REQ = {"common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100}
     STICKY_CHANCE = 0.15
     MAX_REROLLS = 100
+    # Вес выпадения значка по редкости: чем реже значок, тем ниже шанс.
+    ITEM_RARITY_WEIGHTS = {
+        "common":    100,
+        "rare":      30,
+        "epic":      8,
+        "legendary": 1,
+    }
+    ITEM_RARITY_COMPENSATION_SC = {
+        "common":    500,
+        "rare":      3000,
+        "epic":      15000,
+        "legendary": 75000,
+    }
 
     PATTERNS = [
         {"name": "Пирамида", "pattern": ("A", "B", "C", "B", "A"), "action": "reroll", "mult": 1.1},
@@ -144,6 +157,45 @@ class Game:
             return get_total_effects(self.brain, user_id) or {}
         except Exception:
             return {}
+
+    def _pick_random_badge(self):
+        from cosmetics import BADGES
+
+        badge_weights = [
+            (badge_id, self.ITEM_RARITY_WEIGHTS[badge.get("rarity")])
+            for badge_id, badge in BADGES.items()
+            if badge.get("rarity") in self.ITEM_RARITY_WEIGHTS
+        ]
+        if not badge_weights:
+            return None
+
+        badge_ids, weights = zip(*badge_weights)
+        return random.choices(badge_ids, weights=weights, k=1)[0]
+
+    def _award_badge(self, user_id):
+        try:
+            from cosmetics import BADGES
+
+            badge_id = self._pick_random_badge()
+            if badge_id is None:
+                return None
+
+            name = BADGES[badge_id]["name"]
+            equipped = self.brain.db.get_user_badges(user_id)
+            slot = next((i for i in range(5) if not equipped.get(i)), None)
+            if slot is not None:
+                self.brain.db.set_user_badge(user_id, slot, badge_id)
+                return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
+
+            rarity = BADGES[badge_id].get("rarity")
+            amount = self.ITEM_RARITY_COMPENSATION_SC.get(rarity, 500)
+            self.brain.db.add_balance(user_id, "sc", amount)
+            return (
+                f"🎁 Значок <b>{name}</b> не поместился "
+                f"(нет свободных слотов) — начислено <b>{amount} SC</b>."
+            )
+        except Exception:
+            return None
 
     # ---------- ГЕНЕРАЦИЯ ----------
 
@@ -329,6 +381,66 @@ class Game:
             await asyncio.sleep(0.35)
         await asyncio.sleep(0.3)
 
+    def _apply_chain_explosion(self, symbols):
+        line = list(symbols)
+        explosions = 0
+        chain_order = []
+        step = 0
+
+        while True:
+            # Сначала фиксируем весь шаг, чтобы взрывы срабатывали одновременно.
+            detonating = [
+                i for i, symbol in enumerate(line)
+                if symbol == "💣"
+                and (
+                    (i > 0 and line[i - 1] == "🔥")
+                    or (i + 1 < len(line) and line[i + 1] == "🔥")
+                )
+            ]
+            if not detonating:
+                break
+
+            step += 1
+            chain_order.append((step, detonating))
+            explosions += len(detonating)
+            for i in detonating:
+                line[i] = "🔥"
+                if i > 0:
+                    line[i - 1] = "🔥"
+                if i + 1 < len(line):
+                    line[i + 1] = "🔥"
+
+        return line, explosions, chain_order
+
+    async def _anim_explosion(self, message, name, bet, old_symbols, new_symbols, chain_order):
+        if not chain_order:
+            return
+
+        shown = list(old_symbols)
+        await self._render(
+            message, name, bet, " | ".join(shown),
+            "💥 <b>ДИНАМИТ РВАНУЛ!</b> <i>Цепная реакция...</i>"
+        )
+
+        for step, positions in chain_order:
+            for i in positions:
+                shown[i] = "🔥"
+                if i > 0:
+                    shown[i - 1] = "🔥"
+                if i + 1 < len(shown):
+                    shown[i + 1] = "🔥"
+            await self._render(
+                message, name, bet, " | ".join(shown),
+                f"💥 <b>ВЗРЫВ #{step}!</b> <i>Динамит сдетонировал...</i>"
+            )
+            await asyncio.sleep(0.32)
+
+        await asyncio.sleep(0.25)
+        await self._render(
+            message, name, bet, " | ".join(new_symbols),
+            "🔥 <b>Всё полыхает!</b> <i>Огонь перекинулся дальше...</i>"
+        )
+
     async def _anim_reroll(self, message, name, bet, reroll_count, verdict, total):
         if verdict.get("reason") == "pattern":
             header = f"✨ <b>{verdict.get('pattern_name', 'ОСОБАЯ КОМБИНАЦИЯ')}!</b>\n<i>Перекрут...</i>"
@@ -375,6 +487,7 @@ class Game:
         final_symbols = []
         final_description = ""
         any_burn = False
+        total_explosions = 0
 
         while True:
             await self._anim_spin(message, name, bet, cfg)
@@ -392,6 +505,14 @@ class Game:
             # Если что-то загорелось — анимация огня
             if burned:
                 await self._anim_overheat(message, name, bet, symbols_before, symbols)
+
+            symbols_before_chain = list(symbols)
+            symbols, explosions, chain_order = self._apply_chain_explosion(symbols)
+            total_explosions += explosions
+            if explosions > 0:
+                await self._anim_explosion(
+                    message, name, bet, symbols_before_chain, symbols, chain_order
+                )
 
             verdict = self._evaluate(symbols, effects)
             final_symbols = symbols
@@ -421,7 +542,7 @@ class Game:
             is_item_any = False
             await self._anim_loss(message, name, bet, symbols)
             break
-        return total_mult, is_item_any, final_symbols, reroll_count, effects, any_burn
+        return total_mult, is_item_any, final_symbols, reroll_count, effects, any_burn, total_explosions
 
     # ---------- ЗАПУСК ----------
 
@@ -433,7 +554,7 @@ class Game:
         msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
                                    parse_mode="HTML")
 
-        total_mult, is_item, symbols, rerolls, effects, any_burn = await self._resolve(
+        total_mult, is_item, symbols, rerolls, effects, any_burn, explosions = await self._resolve(
             msg, name, bet, spin_key, user_id
         )
 
@@ -524,8 +645,15 @@ class Game:
             total_penalty = int(penalty_per_fire * fire_count * 100)
             result += f"🔥 Сгорело ячеек: <b>{fire_count}</b> (−{total_penalty}%)\n"
 
+        if explosions > 0:
+            result += f"💥 Взорвалось динамита: <b>{explosions}</b>\n"
+
         if is_item:
-            result += "🎁 Выбил предмет!\n"
+            award_msg = self._award_badge(user_id)
+            if award_msg:
+                result += award_msg + "\n"
+            else:
+                result += "🎁 Выбил предмет, но выдать не удалось.\n"
 
         if win_amount > 0:
             final_mult = effective_mult * spin_mult * fire_factor
