@@ -77,12 +77,7 @@ class Game:
         "epic":      8,
         "legendary": 1,
     }
-    ITEM_RARITY_COMPENSATION_SC = {
-        "common":    500,
-        "rare":      3000,
-        "epic":      15000,
-        "legendary": 75000,
-    }
+    FULL_SET_COMPENSATION_SC = 1000  # ≈ 1 000 000 LC эквивалента
 
     PATTERNS = [
         {"name": "Пирамида", "pattern": ("A", "B", "C", "B", "A"), "action": "reroll", "mult": 1.1},
@@ -158,13 +153,16 @@ class Game:
         except Exception:
             return {}
 
-    def _pick_random_badge(self):
+    def _pick_random_badge(self, user_id):
         from cosmetics import BADGES
 
+        equipped = self.brain.db.get_user_badges(user_id)
+        owned_ids = {bid for bid in equipped.values() if bid}
         badge_weights = [
             (badge_id, self.ITEM_RARITY_WEIGHTS[badge.get("rarity")])
             for badge_id, badge in BADGES.items()
             if badge.get("rarity") in self.ITEM_RARITY_WEIGHTS
+            and badge_id not in owned_ids
         ]
         if not badge_weights:
             return None
@@ -174,26 +172,32 @@ class Game:
 
     def _award_badge(self, user_id):
         try:
-            from cosmetics import BADGES
+            from cosmetics import BADGES, badge_slots_for_level
 
-            badge_id = self._pick_random_badge()
+            # Учитываем только слоты, доступные игроку по уровню.
+            level = self.brain.db.get_user(user_id)["level"]
+            max_slots = badge_slots_for_level(level)
+            equipped = self.brain.db.get_user_badges(user_id)
+
+            slot = next(
+                (i for i in range(max_slots) if not equipped.get(i)),
+                None,
+            )
+            if slot is None:
+                amount = self.FULL_SET_COMPENSATION_SC
+                self.brain.db.add_balance(user_id, "sc", amount)
+                return f"🎁 Все слоты заняты! Начислено <b>{amount} SC</b>."
+
+            badge_id = self._pick_random_badge(user_id)
             if badge_id is None:
-                return None
+                # Защитная ветка: с текущим числом значков она не должна срабатывать.
+                amount = self.FULL_SET_COMPENSATION_SC
+                self.brain.db.add_balance(user_id, "sc", amount)
+                return f"🎁 Все значки уже собраны! Начислено <b>{amount} SC</b>."
 
             name = BADGES[badge_id]["name"]
-            equipped = self.brain.db.get_user_badges(user_id)
-            slot = next((i for i in range(5) if not equipped.get(i)), None)
-            if slot is not None:
-                self.brain.db.set_user_badge(user_id, slot, badge_id)
-                return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
-
-            rarity = BADGES[badge_id].get("rarity")
-            amount = self.ITEM_RARITY_COMPENSATION_SC.get(rarity, 500)
-            self.brain.db.add_balance(user_id, "sc", amount)
-            return (
-                f"🎁 Значок <b>{name}</b> не поместился "
-                f"(нет свободных слотов) — начислено <b>{amount} SC</b>."
-            )
+            self.brain.db.set_user_badge(user_id, slot, badge_id)
+            return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
         except Exception:
             return None
 
