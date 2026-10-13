@@ -12,29 +12,60 @@ BUTTONS = {
     "profile":  "👤 Профиль",
     "top":      "🏆 Лидерборд",
     "inv":      "🎒 Инвентарь",
+    "about":    "ℹ️ О боте",
     "settings": "⚙️ Настройки",
 }
 
 LAYOUTS = {
     "classic": {
         "name": "🎰 Классика",
-        "rows": [["play"], ["casino", "shop"], ["trade", "profile"], ["top", "inv"], ["settings"]],
+        "rows": [
+            ["play"],
+            ["casino", "shop"],
+            ["trade", "profile"],
+            ["top", "inv"],
+            ["about", "settings"],
+        ],
     },
     "compact": {
         "name": "📦 Компакт",
-        "rows": [["play", "casino"], ["shop", "trade"], ["profile", "inv"], ["top", "settings"]],
+        "rows": [
+            ["play", "casino"],
+            ["shop", "trade"],
+            ["profile", "inv"],
+            ["top", "about"],
+            ["settings"],
+        ],
     },
     "social": {
         "name": "👤 Социальный",
-        "rows": [["profile", "top"], ["trade", "casino"], ["play", "inv"], ["shop", "settings"]],
+        "rows": [
+            ["profile", "top"],
+            ["trade", "casino"],
+            ["play", "inv"],
+            ["shop", "about"],
+            ["settings"],
+        ],
     },
     "competitive": {
         "name": "🏆 Соревновательный",
-        "rows": [["top", "play"], ["casino", "trade"], ["profile", "shop"], ["inv", "settings"]],
+        "rows": [
+            ["top", "play"],
+            ["casino", "trade"],
+            ["profile", "shop"],
+            ["inv", "about"],
+            ["settings"],
+        ],
     },
     "minimal": {
         "name": "🎯 Минимал",
-        "rows": [["play"], ["casino"], ["profile"], ["inv"]],
+        "rows": [
+            ["play"],
+            ["casino"],
+            ["profile"],
+            ["inv"],
+            ["about"],
+        ],
     },
 }
 
@@ -80,9 +111,11 @@ class Menu:
     def register(self, dp: Dispatcher):
         dp.message(Command("start"))(self.cmd_start)
         dp.message(Command("menu"))(self.cmd_start)
+        dp.message(Command("version"))(self.cmd_version)
         dp.callback_query(F.data == "profile")(self.cb_profile)
         dp.callback_query(F.data == "top")(self.cb_top)
         dp.callback_query(F.data == "menu")(self.cb_menu)
+        dp.callback_query(F.data == "about")(self.cb_about)
         dp.callback_query(F.data == "settings")(self.cb_settings)
         dp.callback_query(F.data == "set_layout_menu")(self.cb_layouts)
         dp.callback_query(F.data.startswith("set_layout_"))(self.cb_set_layout)
@@ -124,6 +157,14 @@ class Menu:
         text += _maint_line(self.brain)
         await message.answer(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
 
+    async def cmd_version(self, message: Message):
+        try:
+            from version import format_changelog
+            text = format_changelog(limit=3)
+        except Exception:
+            text = "🎰 <b>LuckyScoin</b> v1.0.0"
+        await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+
     async def cb_menu(self, query: CallbackQuery):
         await safe_answer(query)
         user_id = query.from_user.id
@@ -150,6 +191,28 @@ class Menu:
         except Exception:
             pass
 
+    async def cb_about(self, query: CallbackQuery):
+        await safe_answer(query)
+        try:
+            from version import format_changelog
+            text = format_changelog(limit=5)
+        except Exception:
+            text = (
+                "🎰 <b>LuckyScoin</b>\n\n"
+                "Версия: <b>1.0.0</b>\n\n"
+                "<i>Информация о версии недоступна.</i>"
+            )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎰 Играть", callback_data="play")],
+            [InlineKeyboardButton(text="⬅️ Назад",  callback_data="menu")],
+        ])
+        try:
+            await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML",
+                                          disable_web_page_preview=True)
+        except Exception:
+            pass
+
     async def cb_profile(self, query: CallbackQuery):
         await safe_answer(query)
         user_id = query.from_user.id
@@ -169,7 +232,6 @@ class Menu:
                 casino_block += f" • 💰 {pending} LC к сбору"
             casino_block += "\n"
 
-        # Значки
         badges_block = ""
         try:
             from cosmetics import BADGES

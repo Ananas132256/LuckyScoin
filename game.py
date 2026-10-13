@@ -13,46 +13,25 @@ class BetStates(StatesGroup):
     waiting_for_bet = State()
 
 
-# ============================================================
-#  КОНСТАНТЫ
-# ============================================================
-
-EXCHANGE_LC_TO_SC = 1000    # 1000 LC = 1 SC
-EXCHANGE_SC_TO_LC = 500     # 1 SC = 500 LC
-
-TYPE_ALIASES = {
-    "обычное": "common", "обычная": "common", "обычный": "common", "common": "common",
-    "необычное": "uncommon", "необычная": "uncommon", "необычный": "uncommon", "uncommon": "uncommon",
-    "редкое": "rare", "редкая": "rare", "редкий": "rare", "rare": "rare",
-    "ультра": "ultra", "ультраредкое": "ultra", "ультраредкая": "ultra", "ultra": "ultra",
-}
-
-
-# ============================================================
-#  ХЕЛПЕРЫ
-# ============================================================
-
-async def safe_answer(query, *args, **kwargs):
-    """Безопасный ответ на callback — глушит 'query too old'."""
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
-
-
-def _runs(symbols):
+def _runs(symbols, skip=("🔥",)):
+    """Серии одинаковых, игнорируя 🔥 (он рвёт серию)."""
     result = {}
     if not symbols:
         return result
-    cur, cnt = symbols[0], 1
-    for s in symbols[1:]:
+    cur, cnt = None, 0
+    for s in symbols:
+        if s in skip:
+            if cur and cnt > result.get(cur, 0):
+                result[cur] = cnt
+            cur, cnt = None, 0
+            continue
         if s == cur:
             cnt += 1
         else:
-            if cnt > result.get(cur, 0):
+            if cur and cnt > result.get(cur, 0):
                 result[cur] = cnt
             cur, cnt = s, 1
-    if cnt > result.get(cur, 0):
+    if cur and cnt > result.get(cur, 0):
         result[cur] = cnt
     return result
 
@@ -84,38 +63,40 @@ def _match_pattern(symbols, pattern):
     return True
 
 
-# ============================================================
-#  ИГРА
-# ============================================================
-
 class Game:
-    LEVEL_REQ = {"common": 0, "uncommon": 5, "rare": 25, "ultra": 100}
-    STICKY_CHANCE = 0.3
-    MAX_REROLLS = 30
+    # ============================================================
+    #  НАСТРОЙКИ
+    # ============================================================
+    LEVEL_REQ = {"common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100}
+    STICKY_CHANCE = 0.15
+    MAX_REROLLS = 100
 
     PATTERNS = [
-        {"name": "Пирамида", "pattern": ("A", "B", "C", "B", "A"), "action": "reroll", "mult": 0},
+        {"name": "Пирамида", "pattern": ("A", "B", "C", "B", "A"), "action": "reroll", "mult": 1.1},
         {"name": "Зигзаг",   "pattern": ("A", "B", "A", "B", "A"), "action": "reroll", "mult": 0},
+        {"name": "ДЖЕКПОТ",  "pattern": ("A", "A", "A", "A", "A"), "action": "win",    "mult": 2},
     ]
 
     SYMBOLS = {
-        "7️⃣": {"weight": 1,   "pay": {3: 77,   4: 77,   5: 777},   "reroll": True},
-        "🎲": {"weight": 0.5, "pay": {3: 100,  4: 100,  5: 1000},  "reroll": True},
-        "🍀": {"weight": 200, "pay": {3: 7.5,  4: 10,   5: 100},   "reroll": True},
-        "💣": {"weight": 15,  "pay": {3: -0.5, 4: -1,   5: -20},   "reroll": True},
-        "🍎": {"weight": 215, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
-        "🍍": {"weight": 250, "pay": {3: 1.5,  4: 3,    5: 15},    "reroll": False},
-        "🍊": {"weight": 225, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
-        "🍋": {"weight": 215, "pay": {3: 2,    4: 4,    5: 20},    "reroll": False},
-        "🪙": {"weight": 40,  "pay": {3: 5,    4: 5,    5: 50},    "reroll": False},
-        "⚙️": {"weight": 9,   "pay": {3: "item", 4: "item", 5: "item"}, "reroll": True},
+        "7️⃣": {"weight": 1,   "pay": {3: 77,     4: 77,     5: 777  }, "reroll": False},
+        "🎲": {"weight": 5,   "pay": {3: 50,     4: 100,    5: 200  }, "reroll": True},
+        "🍀": {"weight": 50,  "pay": {3: 5,      4: 7.5,    5: 50   }, "reroll": True},
+        "💣": {"weight": 200, "pay": {3: -0.5,   4: -0.75,  5: -0.99}, "reroll": False},
+        "🍎": {"weight": 225, "pay": {3: 1.5,    4: 4,      5: 10   }, "reroll": False},
+        "🍍": {"weight": 225, "pay": {3: 1.5,    4: 3,      5: 10   }, "reroll": False},
+        "🍭": {"weight": 150, "pay": {3: 2,      4: 5,      5: 15   }, "reroll": True},
+        "🍋": {"weight": 225, "pay": {3: 1.5,    4: 4,      5: 10   }, "reroll": False},
+        "🪙": {"weight": 50,  "pay": {3: 5,      4: 7.5,    5: 50   }, "reroll": True},
+        "⚙️": {"weight": 50,  "pay": {3: "item", 4: "item", 5: "item"}, "reroll": False},
+        "💎": {"weight": 50,  "pay": {3: 5,      4: 7.5,    5: 50   }, "reroll": False},
     }
 
     SPIN_TYPES = {
-        "common":   ("Обычная",       1,   5,         1),
-        "uncommon": ("Необычная",     5,   250,       1.5),
-        "rare":     ("Редкая",        25,  1000,      5),
-        "ultra":    ("Ультраредкая",  100, 999999999, 100),
+        "common":   ("Обычная",       1,     5,         1),
+        "uncommon": ("Необычная",     6,     250,       2),
+        "rare":     ("Редкая",        250,   1000,      5),
+        "ultra":    ("Ультраредкая",  1000,  10000,     15),
+        "epic":     ("Эпическая",     10000, 1000000,   50),
     }
 
     SPIN_ANIM = {
@@ -123,9 +104,24 @@ class Game:
         "uncommon": {"spin_frames": 10, "spin_delay": 0.09, "stop_delay": 0.36, "last_stop_delay": 0.65, "fake_stops": 1, "label": "⚡"},
         "rare":     {"spin_frames": 12, "spin_delay": 0.10, "stop_delay": 0.40, "last_stop_delay": 0.80, "fake_stops": 2, "label": "💫"},
         "ultra":    {"spin_frames": 16, "spin_delay": 0.10, "stop_delay": 0.45, "last_stop_delay": 1.00, "fake_stops": 3, "label": "🔥"},
+        "epic":     {"spin_frames": 24, "spin_delay": 0.11, "stop_delay": 0.50, "last_stop_delay": 1.00, "fake_stops": 4, "label": "👾"},
     }
 
     NOISE = ["🎰", "🍒", "🍋", "7️⃣", "🎲", "🍀", "⚙️", "🪙", "💎", "🔔"]
+
+    # ============================================================
+    #  ПЕРЕГРЕВ
+    # ============================================================
+    # (иконка, шанс на 1 ячейку, шанс на всю линию)
+    OVERHEAT_STAGES = [
+        ("🌀🌀🌀🌀🌀", 0.00, 0.00),   # 0
+        ("🔥🌀🌀🌀🌀", 0.01, 0.00),   # 1
+        ("🔥🔥🌀🌀🌀", 0.05, 0.00),   # 2
+        ("🔥🔥🔥🌀🌀", 0.20, 0.05),   # 3
+        ("🔥🔥🔥🔥🌀", 0.50, 0.15),   # 4
+        ("🔥🔥🔥🔥🔥", 0.75, 0.50),   # 5
+    ]
+    FIRE_PENALTY = 0.20   # -20% за каждый 🔥
 
     def __init__(self, brain):
         self.brain = brain
@@ -138,23 +134,36 @@ class Game:
         dp.callback_query(F.data == "locked")(self.cb_locked)
         dp.callback_query(F.data == "free_lc")(self.cb_free_lc)
         dp.callback_query(F.data == "exchange")(self.cb_exchange)
-        dp.callback_query(F.data == "buy_sc")(self.cb_buy_sc)
         dp.message(BetStates.waiting_for_bet)(self.on_bet_input)
-        dp.message(F.text.func(lambda t: bool(t) and t.strip().lower().startswith("крутить")))(self.cmd_spin_text)
-        dp.message(F.text.func(lambda t: bool(t) and t.strip().lower().startswith("обмен")))(self.cmd_exchange_text)
 
-    # ---------------------------------------------------------
-    #  ГЕНЕРАЦИЯ И ОЦЕНКА
-    # ---------------------------------------------------------
-    def _spin(self, reroll_count=0):
+    # ---------- ЭФФЕКТЫ ----------
+
+    def _effects(self, user_id):
+        try:
+            from item_system import get_total_effects
+            return get_total_effects(self.brain, user_id) or {}
+        except Exception:
+            return {}
+
+    # ---------- ГЕНЕРАЦИЯ ----------
+
+    def _spin(self, reroll_count=0, effects=None):
+        effects = effects or {}
+        luck = effects.get("luck", 0)
         keys = list(self.SYMBOLS.keys())
-        factor = 0.5 ** reroll_count
+        factor = max(0.5 ** reroll_count, 1e-9)
         weights = []
         for k in keys:
             w = self.SYMBOLS[k]["weight"]
             if self.SYMBOLS[k]["reroll"]:
                 w *= factor
-            weights.append(w)
+            if luck > 0:
+                if k == "💣":
+                    w *= max(0.1, 1 - luck)
+                elif k in ("7️⃣", "🎲", "🍀"):
+                    w *= (1 + luck * 2)
+            weights.append(max(w, 1e-9))
+
         result = []
         for _ in range(5):
             if result and random.random() < self.STICKY_CHANCE:
@@ -163,32 +172,67 @@ class Game:
                 result.append(random.choices(keys, weights=weights, k=1)[0])
         return result
 
-    def _evaluate(self, symbols):
+    def _apply_overheat(self, symbols, stage, effects=None):
+        """
+        Применяет перегрев ПОСЛЕ выпадения символов.
+        Возвращает (новая_линия, сгорела_ли_вся, было_ли_возгорание).
+        """
+        effects = effects or {}
+        # fire_shield уменьшает шанс загорания (0.5 = -50% шанс)
+        shield = effects.get("fire_shield", 0)
+        icon, cell_chance, line_chance = self.OVERHEAT_STAGES[stage]
+
+        cell_chance = max(0.0, cell_chance * (1 - shield))
+        line_chance = max(0.0, line_chance * (1 - shield))
+
+        # Шанс что вся линия сгорит
+        if line_chance > 0 and random.random() < line_chance:
+            return ["🔥"] * 5, True, True
+
+        # Иначе — каждая ячейка независимо
+        result = list(symbols)
+        burned = False
+        for i in range(5):
+            if random.random() < cell_chance:
+                result[i] = "🔥"
+                burned = True
+        return result, False, burned
+
+    def _evaluate(self, symbols, effects=None):
+        effects = effects or {}
+        bomb_shield = effects.get("bomb_shield", 0)
+
         sym, run = _best_run(symbols)
         if run >= 3:
             pay = self.SYMBOLS[sym]["pay"].get(run, 0)
             is_item = (pay == "item")
             mult = 5.0 if is_item else float(pay)
+
+            if sym == "💣" and mult < 0 and bomb_shield > 0:
+                mult *= max(0.0, 1 - bomb_shield)
+
             if self.SYMBOLS[sym]["reroll"]:
                 return {"action": "reroll", "mult": mult, "item": is_item,
                         "sym": sym, "run": run, "reason": "unstable"}
             return {"action": "win", "mult": mult, "item": is_item,
                     "sym": sym, "run": run}
-        for p in self.PATTERNS:
-            if _match_pattern(symbols, p["pattern"]):
-                return {
-                    "action": p.get("action", "reroll"),
-                    "mult": float(p.get("mult", 1)),
-                    "item": False,
-                    "sym": None, "run": 0,
-                    "reason": "pattern",
-                    "pattern_name": p.get("name", "?"),
-                }
+
+        # Паттерны: не должны содержать 🔥
+        if "🔥" not in symbols:
+            for p in self.PATTERNS:
+                if _match_pattern(symbols, p["pattern"]):
+                    return {
+                        "action": p.get("action", "reroll"),
+                        "mult": float(p.get("mult", 1)),
+                        "item": False,
+                        "sym": None, "run": 0,
+                        "reason": "pattern",
+                        "pattern_name": p.get("name", "?"),
+                    }
         return {"action": "loss"}
 
-    # ---------------------------------------------------------
-    #  ОТРИСОВКА
-    # ---------------------------------------------------------
+    # ---------- ОТРИСОВКА ----------
+
     async def _safe_edit(self, message, text, **kwargs):
         try:
             await message.edit_text(text, **kwargs)
@@ -206,9 +250,6 @@ class Game:
         text += f"\n<blockquote>{line_display}</blockquote>"
         await self._safe_edit(message, text, parse_mode="HTML")
 
-    # ---------------------------------------------------------
-    #  АНИМАЦИИ
-    # ---------------------------------------------------------
     async def _anim_spin(self, message, name, bet, cfg):
         await self._render(message, name, bet, "⬜ | ⬜ | ⬜ | ⬜ | ⬜",
                            f"{cfg['label']} <i>Подготовка...</i>")
@@ -219,10 +260,10 @@ class Game:
             rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
             progress = i / max(1, frames - 1)
             if progress < 0.5:
-                speed_factor = 1 - progress * 1.6
+                sf = 1 - progress * 1.6
             else:
-                speed_factor = 0.2 + (progress - 0.5) * 3.0
-            delay = base_delay * max(0.15, speed_factor)
+                sf = 0.2 + (progress - 0.5) * 3.0
+            delay = base_delay * max(0.15, sf)
             if progress < 0.5:
                 speed = "⏩ ⏩ ⏩"
             elif progress < 0.8:
@@ -269,6 +310,25 @@ class Game:
             else:
                 await asyncio.sleep(cfg["stop_delay"] + idx * 0.10)
 
+    async def _anim_overheat(self, message, name, bet, old_symbols, new_symbols):
+        """Анимация возгорания ячеек после reveal."""
+        # Находим ячейки, которые загорелись
+        burned_idx = [i for i in range(5) if old_symbols[i] != new_symbols[i]]
+        if not burned_idx:
+            return
+
+        # Показываем процесс — по одной ячейке
+        shown = list(old_symbols)
+        for idx in burned_idx:
+            shown[idx] = "🔥"
+            display = " | ".join(shown)
+            await self._render(
+                message, name, bet, display,
+                "🔥 <b>ВОЗГОРАНИЕ!</b> <i>Ячейка загорелась...</i>"
+            )
+            await asyncio.sleep(0.35)
+        await asyncio.sleep(0.3)
+
     async def _anim_reroll(self, message, name, bet, reroll_count, verdict, total):
         if verdict.get("reason") == "pattern":
             header = f"✨ <b>{verdict.get('pattern_name', 'ОСОБАЯ КОМБИНАЦИЯ')}!</b>\n<i>Перекрут...</i>"
@@ -293,22 +353,40 @@ class Game:
         await self._render(message, name, bet, line, "😔 <i>Ничего не выпало...</i>")
         await asyncio.sleep(0.55)
 
-    # ---------------------------------------------------------
-    #  ГЛАВНЫЙ ЦИКЛ
-    # ---------------------------------------------------------
-    async def _resolve(self, message, name, bet, spin_key):
+    # ---------- ГЛАВНЫЙ ЦИКЛ ----------
+
+    async def _resolve(self, message, name, bet, spin_key, user_id):
         cfg = self.SPIN_ANIM.get(spin_key, self.SPIN_ANIM["common"])
+        effects = self._effects(user_id)
+        stage, _ = self.brain.db.get_overheat_stage(user_id)
+
         total_mult = 0.0
         is_item_any = False
         reroll_count = 0
         final_symbols = []
         final_description = ""
+        any_burn = False
+
         while True:
             await self._anim_spin(message, name, bet, cfg)
-            symbols = self._spin(reroll_count)
-            await self._anim_reveal(message, name, bet, symbols, cfg)
-            verdict = self._evaluate(symbols)
+            symbols = self._spin(reroll_count, effects)
+
+            # Применяем перегрев
+            symbols_before = list(symbols)
+            symbols, burned_all, burned = self._apply_overheat(symbols, stage, effects)
+            if burned:
+                any_burn = True
+
+            # Reveal — показываем символы БЕЗ огня сначала
+            await self._anim_reveal(message, name, bet, symbols_before, cfg)
+
+            # Если что-то загорелось — анимация огня
+            if burned:
+                await self._anim_overheat(message, name, bet, symbols_before, symbols)
+
+            verdict = self._evaluate(symbols, effects)
             final_symbols = symbols
+
             if verdict["action"] == "win":
                 total_mult += verdict["mult"]
                 is_item_any = is_item_any or verdict["item"]
@@ -331,11 +409,10 @@ class Game:
             is_item_any = False
             await self._anim_loss(message, name, bet, symbols)
             break
-        return total_mult, is_item_any, final_symbols, reroll_count
+        return total_mult, is_item_any, final_symbols, reroll_count, effects, any_burn
 
-    # ---------------------------------------------------------
-    #  ЗАПУСК ИГРЫ
-    # ---------------------------------------------------------
+    # ---------- ЗАПУСК ----------
+
     async def _start_game(self, message: Message, spin_key: str, bet: int):
         user_id = message.from_user.id
         self.brain.db.add_balance(user_id, "lc", -bet)
@@ -344,49 +421,123 @@ class Game:
         msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
                                    parse_mode="HTML")
 
-        total_mult, is_item, symbols, rerolls = await self._resolve(msg, name, bet, spin_key)
-        win_amount = math.ceil(bet * total_mult * spin_mult) if total_mult > 0 else 0
+        total_mult, is_item, symbols, rerolls, effects, any_burn = await self._resolve(
+            msg, name, bet, spin_key, user_id
+        )
+
+        mult_bonus = effects.get("mult_bonus", 0)
+        effective_mult = total_mult * (1 + mult_bonus) if total_mult > 0 else total_mult
+
+        # Штраф за 🔥
+        fire_count = symbols.count("🔥")
+        fire_reduction = effects.get("fire_reduction", 0)
+        penalty_per_fire = self.FIRE_PENALTY * (1 - min(fire_reduction, 1.0))
+        fire_factor = max(0.0, 1 - penalty_per_fire * fire_count)
+
+        win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor) if effective_mult > 0 else 0
 
         if win_amount > 0:
             self.brain.db.add_balance(user_id, "lc", win_amount)
             self.brain.db.add_result(user_id, True)
+            self.brain.db.add_streak_win(user_id)
         else:
             self.brain.db.add_result(user_id, False)
+            self.brain.db.add_streak_loss(user_id)
+
+        self.brain.db.add_bet_stats(user_id, bet, win_amount)
+
+        # +1 к перегреву
+        self.brain.db.add_overheat(user_id)
 
         xp_gain = spin_mult * 20 * (2 if win_amount > 0 else 1)
+        xp_bonus = effects.get("xp_bonus", 0)
+        xp_gain = int(xp_gain * (1 + xp_bonus))
         level, xp, leveled_up = self.brain.db.add_xp(user_id, xp_gain)
         xp_needed = 100 * (level + 1)
 
+        # --- Поломка значков ---
+        break_messages = []
+        try:
+            from item_system import should_break, handle_break
+            from cosmetics import BADGES
+            equipped = self.brain.db.get_user_badges_full(user_id)
+            trigger = "win" if win_amount > 0 else "loss"
+            for slot in list(equipped.keys()):
+                info = equipped[slot]
+                bid = info["badge_id"]
+                badge = BADGES.get(bid)
+                if not badge:
+                    continue
+                if should_break(badge, "roll") or should_break(badge, trigger):
+                    brk_msg = handle_break(self.brain, user_id, bid, slot)
+                    if brk_msg:
+                        break_messages.append(brk_msg)
+                else:
+                    hp = info["hp"]
+                    if hp != -1:
+                        new_hp = hp - 1
+                        if new_hp <= 0:
+                            brk_msg = handle_break(self.brain, user_id, bid, slot)
+                            if brk_msg:
+                                break_messages.append(brk_msg)
+                        else:
+                            self.brain.db.set_badge_hp(user_id, slot, new_hp)
+        except Exception:
+            pass
+
+        # --- Результат ---
         slot_line = " | ".join(symbols)
         result = f"🎰 <b>{name} крутка</b>\n\n"
         result += f"💰 Ставка: {bet} LC\n\n"
         result += f"<blockquote>{slot_line}</blockquote>\n\n"
+
         if rerolls > 0:
             result += f"🔄 Рероллов: <b>{rerolls}</b>\n"
+
+        if fire_count > 0:
+            total_penalty = int(penalty_per_fire * fire_count * 100)
+            result += f"🔥 Сгорело ячеек: <b>{fire_count}</b> (−{total_penalty}%)\n"
+
         if is_item:
             result += "🎁 Выбил предмет!\n"
+
         if win_amount > 0:
-            result += f"✅ <b>+{win_amount} LC</b> (x{total_mult * spin_mult:g})\n"
+            final_mult = effective_mult * spin_mult * fire_factor
+            result += f"✅ <b>+{win_amount} LC</b> (x{final_mult:g})"
+            if mult_bonus > 0:
+                result += f" <i>(+{int(mult_bonus*100)}% от значков)</i>"
+            result += "\n"
         elif win_amount < 0:
             result += f"💣 <b>{win_amount} LC</b>\n"
         else:
             result += "❌ Ничего...\n"
+
         result += f"\n⭐ +{xp_gain} XP" + (" (x2!)" if win_amount > 0 else "")
+        if xp_bonus > 0:
+            result += f" <i>(+{int(xp_bonus*100)}% от значков)</i>"
+
         if leveled_up:
             result += f"\n🎉 <b>НОВЫЙ УРОВЕНЬ: {level}!</b>"
+
         result += f"\n⭐ Ур. {level} — XP {xp}/{xp_needed}"
         result += f"\n💰 Баланс LC: {self.brain.db.get_balance(user_id, 'lc')}"
+
+        # Показываем перегрев после спина
+        new_stage, new_score = self.brain.db.get_overheat_stage(user_id)
+        oh_icon, _, _ = self.OVERHEAT_STAGES[new_stage]
+        result += f"\n🔥 Перегрев: {oh_icon} <code>({new_score}/100)</code>"
+
+        if break_messages:
+            result += "\n\n" + "\n".join(break_messages)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Ещё", callback_data=f"again_{spin_key}")],
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="play")]])
         await self._safe_edit(msg, result, reply_markup=kb, parse_mode="HTML")
 
-    # ---------------------------------------------------------
-    #  МЕНЮ (callback)
-    # ---------------------------------------------------------
+    # ---------- МЕНЮ ----------
+
     async def cb_play(self, query: CallbackQuery, state: FSMContext = None):
-        await safe_answer(query)
         if state:
             await state.clear()
         user_id = query.from_user.id
@@ -396,9 +547,25 @@ class Game:
         last_free = self.brain.db.get_last_free_lc(user_id)
         can_get_free = (time.time() - last_free) > 3600
 
+        # Перегрев
+        oh_stage, oh_score = self.brain.db.get_overheat_stage(user_id)
+        oh_icon, _, _ = self.OVERHEAT_STAGES[oh_stage]
+
+        # Эффекты
+        effects = self._effects(user_id)
+        eff_line = ""
+        if effects:
+            try:
+                from cosmetics import describe_effect_dict
+                eff_line = f"\n✨ <i>{describe_effect_dict(effects)}</i>"
+            except Exception:
+                pass
+
         text = (f"🎰 <b>Игровой зал LuckyScoin</b>\n\n"
                 f"💰 Баланс LC: {lc}\n"
-                f"⭐ Уровень: {level} (XP: {xp}/{xp_needed})\n\n"
+                f"⭐ Уровень: {level} (XP: {xp}/{xp_needed})\n"
+                f"🔥 Перегрев: {oh_icon} <code>({oh_score}/100)</code>"
+                f"{eff_line}\n\n"
                 f"Выбери тип крутки:")
         if can_get_free:
             text += "\n\n🎁 Доступны бесплатные LC!"
@@ -422,17 +589,18 @@ class Game:
         await self._safe_edit(query.message, text,
                               reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                               parse_mode="HTML")
+        await query.answer()
 
     async def cb_locked(self, query: CallbackQuery):
-        await safe_answer(query, "🔒 Недостаточный уровень!", show_alert=True)
+        await query.answer("🔒 Недостаточный уровень!", show_alert=True)
 
     async def _ask_bet(self, query, spin_key, state):
         if spin_key not in self.SPIN_TYPES:
-            return await safe_answer(query, "Неизвестный тип!", show_alert=True)
+            return await query.answer("Неизвестный тип!", show_alert=True)
         user_id = query.from_user.id
         level, _ = self.brain.db.get_level_xp(user_id)
         if level < self.LEVEL_REQ.get(spin_key, 0):
-            return await safe_answer(query, f"Нужен уровень {self.LEVEL_REQ[spin_key]}!", show_alert=True)
+            return await query.answer(f"Нужен уровень {self.LEVEL_REQ[spin_key]}!", show_alert=True)
         name, min_b, max_b, mult = self.SPIN_TYPES[spin_key]
         await state.set_state(BetStates.waiting_for_bet)
         await state.update_data(spin_key=spin_key, min_bet=min_b, max_bet=max_b)
@@ -443,199 +611,64 @@ class Game:
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_bet")]]),
             parse_mode="HTML")
+        await query.answer()
 
     async def cb_choose_type(self, query: CallbackQuery, state: FSMContext):
-        await safe_answer(query)
         await self._ask_bet(query, query.data.split("_", 1)[1], state)
 
     async def cb_spin_again(self, query: CallbackQuery, state: FSMContext):
-        await safe_answer(query)
         await self._ask_bet(query, query.data.split("_", 1)[1], state)
 
     async def cb_cancel_bet(self, query: CallbackQuery, state: FSMContext):
-        await safe_answer(query)
         await state.clear()
         await self.cb_play(query, state)
 
-    # ---------------------------------------------------------
-    #  ВВОД СТАВКИ (FSM)
-    # ---------------------------------------------------------
     async def on_bet_input(self, message: Message, state: FSMContext):
         text = (message.text or "").strip()
         if text.startswith("/"):
             await state.clear()
             return await message.answer("Ок, отменено.")
-
         data = await state.get_data()
         spin_key = data.get("spin_key")
         min_b, max_b = data.get("min_bet", 1), data.get("max_bet", 3)
         if spin_key is None:
             await state.clear()
             return
-
         try:
             bet = int(text)
         except ValueError:
             return await message.answer(f"Введи число от {min_b} до {max_b}.")
         if not (min_b <= bet <= max_b):
             return await message.answer(f"Ставка от {min_b} до {max_b}.")
-
         user_id = message.from_user.id
         if self.brain.db.get_balance(user_id, "lc") < bet:
             return await message.answer(
                 f"Недостаточно LC. У тебя {self.brain.db.get_balance(user_id, 'lc')}.")
-
         await state.clear()
         await self._start_game(message, spin_key, bet)
 
-    # ---------------------------------------------------------
-    #  ТЕКСТОВАЯ КОМАНДА «крутить ...»
-    # ---------------------------------------------------------
-    async def cmd_spin_text(self, message: Message, state: FSMContext):
-        await state.clear()
-        args = message.text.strip().split()
-        user_id = message.from_user.id
+    # ---------- ПРОЧИЕ ----------
 
-        if len(args) == 1:
-            return await message.answer(
-                "🎰 <b>Текстовые команды для круток</b>\n\n"
-                "<code>крутить обычное 5</code>\n"
-                "<code>крутить необычное 50</code>\n"
-                "<code>крутить редкое 100</code>\n"
-                "<code>крутить ультра 200</code>\n\n"
-                "<i>Типы: обычное, необычное, редкое, ультра</i>",
-                parse_mode="HTML"
-            )
-
-        type_str = args[1].lower()
-        spin_key = TYPE_ALIASES.get(type_str)
-        if not spin_key:
-            return await message.answer(
-                "❓ Неизвестный тип. Доступные: обычное, необычное, редкое, ультра"
-            )
-
-        level, _ = self.brain.db.get_level_xp(user_id)
-        if level < self.LEVEL_REQ.get(spin_key, 0):
-            return await message.answer(f"🔒 Нужен уровень {self.LEVEL_REQ[spin_key]}")
-
-        name, min_b, max_b, _ = self.SPIN_TYPES[spin_key]
-
-        if len(args) == 2:
-            await state.set_state(BetStates.waiting_for_bet)
-            await state.update_data(spin_key=spin_key, min_bet=min_b, max_bet=max_b)
-            return await message.answer(
-                f"🎰 <b>{name} крутка</b>\n\n"
-                f"Введи ставку (от {min_b} до {max_b} LC):",
-                parse_mode="HTML"
-            )
-
-        try:
-            bet = int(args[2])
-        except ValueError:
-            return await message.answer("❌ Ставка должна быть числом.")
-        if not (min_b <= bet <= max_b):
-            return await message.answer(f"❌ Ставка от {min_b} до {max_b}.")
-
-        if self.brain.db.get_balance(user_id, "lc") < bet:
-            return await message.answer(
-                f"❌ Недостаточно LC. У тебя {self.brain.db.get_balance(user_id, 'lc')}.")
-
-        await self._start_game(message, spin_key, bet)
-
-    # ---------------------------------------------------------
-    #  ОБМЕННИК — КНОПКА
-    # ---------------------------------------------------------
-    async def cb_exchange(self, query: CallbackQuery):
-        await safe_answer(query)
-        text = (
-            "💱 <b>Обмен валют</b>\n\n"
-            f"LC → SC: <b>{EXCHANGE_LC_TO_SC} LC</b> = <b>1 SC</b>\n"
-            f"SC → LC: <b>1 SC</b> = <b>{EXCHANGE_SC_TO_LC} LC</b>\n\n"
-            "<b>Как обменять:</b>\n"
-            "<code>обмен 2000 lc</code> — продать 2000 LC\n"
-            "<code>обмен 3 sc</code> — продать 3 SC\n\n"
-            "<i>Можно указывать любую сумму — сколько хочешь перевести.</i>"
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="play")]
-        ])
-        try:
-            await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
-
-    # ---------------------------------------------------------
-    #  ОБМЕННИК — ТЕКСТ
-    # ---------------------------------------------------------
-    async def cmd_exchange_text(self, message: Message):
-        args = message.text.strip().split()
-        user_id = message.from_user.id
-
-        if len(args) < 3:
-            return await message.answer(
-                "💱 <b>Обмен валют</b>\n\n"
-                f"LC → SC: <b>{EXCHANGE_LC_TO_SC} LC</b> = <b>1 SC</b>\n"
-                f"SC → LC: <b>1 SC</b> = <b>{EXCHANGE_SC_TO_LC} LC</b>\n\n"
-                "Напиши: <code>обмен 2000 lc</code> или <code>обмен 3 sc</code>",
-                parse_mode="HTML"
-            )
-
-        try:
-            amount = int(args[1])
-        except ValueError:
-            return await message.answer("❌ Сумма должна быть числом.")
-        if amount <= 0:
-            return await message.answer("❌ Сумма должна быть больше 0.")
-
-        currency = args[2].lower()
-        if currency not in ("lc", "sc"):
-            return await message.answer("❌ Валюта: <b>lc</b> или <b>sc</b>.",
-                                        parse_mode="HTML")
-
-        if currency == "lc":
-            if amount < EXCHANGE_LC_TO_SC:
-                return await message.answer(
-                    f"❌ Минимум {EXCHANGE_LC_TO_SC} LC для обмена.")
-            balance = self.brain.db.get_balance(user_id, "lc")
-            if balance < amount:
-                return await message.answer(f"❌ У тебя только {balance} LC.")
-
-            gained_sc = amount // EXCHANGE_LC_TO_SC
-            used_lc = gained_sc * EXCHANGE_LC_TO_SC
-            self.brain.db.add_balance(user_id, "lc", -used_lc)
-            self.brain.db.add_balance(user_id, "sc", gained_sc)
-            return await message.answer(
-                f"💱 Обменяно <b>{used_lc} LC</b> → <b>{gained_sc} SC</b>",
-                parse_mode="HTML"
-            )
-
-        balance = self.brain.db.get_balance(user_id, "sc")
-        if balance < amount:
-            return await message.answer(f"❌ У тебя только {balance} SC.")
-
-        gained_lc = amount * EXCHANGE_SC_TO_LC
-        self.brain.db.add_balance(user_id, "sc", -amount)
-        self.brain.db.add_balance(user_id, "lc", gained_lc)
-        return await message.answer(
-            f"💱 Обменяно <b>{amount} SC</b> → <b>{gained_lc} LC</b>",
-            parse_mode="HTML"
-        )
-
-    # ---------------------------------------------------------
-    #  ПРОЧИЕ
-    # ---------------------------------------------------------
     async def cb_free_lc(self, query: CallbackQuery):
         user_id = query.from_user.id
         last = self.brain.db.get_last_free_lc(user_id)
         if (time.time() - last) < 3600:
-            return await safe_answer(
-                query,
+            return await query.answer(
                 f"Подожди {int((3600 - (time.time() - last)) // 60)} мин.",
                 show_alert=True)
         self.brain.db.add_balance(user_id, "lc", 15)
         self.brain.db.set_last_free_lc(user_id, int(time.time()))
-        await safe_answer(query, "🎁 +15 LC!", show_alert=True)
+        await query.answer("🎁 +15 LC!", show_alert=True)
         await self.cb_play(query)
 
-    async def cb_buy_sc(self, query: CallbackQuery):
-        await safe_answer(query, "💰 В разработке!", show_alert=True)
+    async def cb_exchange(self, query: CallbackQuery):
+        user_id = query.from_user.id
+        lc = self.brain.db.get_balance(user_id, "lc")
+        if lc < 20:
+            return await query.answer(f"Нужно 20 LC.", show_alert=True)
+        amount = (lc // 20) * 20
+        sc = amount // 20
+        self.brain.db.add_balance(user_id, "lc", -amount)
+        self.brain.db.add_balance(user_id, "sc", sc)
+        await query.answer(f"💱 {amount} LC → {sc} SC!", show_alert=True)
+        await self.cb_play(query)

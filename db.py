@@ -33,10 +33,17 @@ class DB:
     EVENT_CHANCE = 0.5
     EVENT_DURATION = 1800
 
+    # Перегрев
+    OVERHEAT_PER_STAGE = 20        # очков на 1 стадию
+    OVERHEAT_MAX_STAGE = 5
+    OVERHEAT_COOL_PER_2MIN = 20    # -1 стадия за 2 минуты простоя
+
     def __init__(self):
         import os
         os.makedirs("data", exist_ok=True)
         self.conn = sqlite3.connect("data/casino.db")
+
+        # ============ USERS ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -50,9 +57,18 @@ class DB:
                 xp INTEGER DEFAULT 0,
                 last_free_lc INTEGER DEFAULT 0,
                 layout TEXT DEFAULT 'classic',
-                title TEXT DEFAULT '🎲 Новичок'
+                title TEXT DEFAULT '🎲 Новичок',
+                streak INTEGER DEFAULT 0,
+                max_streak INTEGER DEFAULT 0,
+                total_bets INTEGER DEFAULT 0,
+                total_won INTEGER DEFAULT 0,
+                total_lost INTEGER DEFAULT 0,
+                overheat_score INTEGER DEFAULT 0,
+                last_spin_ts INTEGER DEFAULT 0
             )
         """)
+
+        # ============ ITEMS ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS items (
                 item_id INTEGER PRIMARY KEY,
@@ -70,12 +86,22 @@ class DB:
                 PRIMARY KEY (user_id, item_id)
             )
         """)
+
+        # ============ SHOP ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS shop_meta (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 next_refresh INTEGER DEFAULT 0
             )
         """)
+        self.conn.execute("INSERT OR IGNORE INTO shop_meta (id, next_refresh) VALUES (1, 0)")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS shop_stock (
+                item_id INTEGER PRIMARY KEY
+            )
+        """)
+
+        # ============ CASINO ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS casinos (
                 user_id INTEGER PRIMARY KEY,
@@ -104,6 +130,8 @@ class DB:
                 PRIMARY KEY (user_id, staff_id)
             )
         """)
+
+        # ============ MAINTENANCE ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS maintenance (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -113,34 +141,66 @@ class DB:
             )
         """)
         self.conn.execute("INSERT OR IGNORE INTO maintenance (id, enabled) VALUES (1, 0)")
-        # ---- ЗНАЧКИ ----
+
+        # ============ ЗНАЧКИ ============
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS user_badges (
                 user_id  INTEGER,
                 slot     INTEGER,
                 badge_id TEXT,
+                hp       INTEGER DEFAULT -1,
                 PRIMARY KEY (user_id, slot)
             )
         """)
+
+        # ============ АДМИНЫ ============
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id   INTEGER PRIMARY KEY,
+                added_by  INTEGER DEFAULT 0,
+                added_at  INTEGER DEFAULT 0
+            )
+        """)
+
+        # ============ ЛОГ АДМИН-КОМАНД ============
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id  INTEGER,
+                command   TEXT,
+                args      TEXT,
+                timestamp INTEGER DEFAULT 0
+            )
+        """)
+
         self._migrate()
         self._init_items()
         self.conn.commit()
+
+    # ================= MIGRATE =================
 
     def _migrate(self):
         cur = self.conn.execute("PRAGMA table_info(users)")
         existing_cols = {row[1] for row in cur.fetchall()}
         needed_users = {
-            "username":     "TEXT",
-            "sc":           "INTEGER DEFAULT 0",
-            "lc":           "INTEGER DEFAULT 15",
-            "wins":         "INTEGER DEFAULT 0",
-            "losses":       "INTEGER DEFAULT 0",
-            "games":        "INTEGER DEFAULT 0",
-            "level":        "INTEGER DEFAULT 0",
-            "xp":           "INTEGER DEFAULT 0",
-            "last_free_lc": "INTEGER DEFAULT 0",
-            "layout":       "TEXT DEFAULT 'classic'",
-            "title":        "TEXT DEFAULT '🎲 Новичок'",
+            "username":        "TEXT",
+            "sc":              "INTEGER DEFAULT 0",
+            "lc":              "INTEGER DEFAULT 15",
+            "wins":            "INTEGER DEFAULT 0",
+            "losses":          "INTEGER DEFAULT 0",
+            "games":           "INTEGER DEFAULT 0",
+            "level":           "INTEGER DEFAULT 0",
+            "xp":              "INTEGER DEFAULT 0",
+            "last_free_lc":    "INTEGER DEFAULT 0",
+            "layout":          "TEXT DEFAULT 'classic'",
+            "title":           "TEXT DEFAULT '🎲 Новичок'",
+            "streak":          "INTEGER DEFAULT 0",
+            "max_streak":      "INTEGER DEFAULT 0",
+            "total_bets":      "INTEGER DEFAULT 0",
+            "total_won":       "INTEGER DEFAULT 0",
+            "total_lost":      "INTEGER DEFAULT 0",
+            "overheat_score":  "INTEGER DEFAULT 0",
+            "last_spin_ts":    "INTEGER DEFAULT 0",
         }
         for col, definition in needed_users.items():
             if col not in existing_cols:
@@ -158,6 +218,13 @@ class DB:
         for col, definition in needed_casino.items():
             if col not in casino_cols:
                 self.conn.execute(f"ALTER TABLE casinos ADD COLUMN {col} {definition}")
+
+        cur = self.conn.execute("PRAGMA table_info(user_badges)")
+        badge_cols = {row[1] for row in cur.fetchall()}
+        if "hp" not in badge_cols:
+            self.conn.execute("ALTER TABLE user_badges ADD COLUMN hp INTEGER DEFAULT -1")
+
+    # ================= INIT ITEMS =================
 
     def _init_items(self):
         default_items = [
@@ -229,18 +296,28 @@ class DB:
     def get_user(self, user_id):
         self._ensure(user_id)
         cur = self.conn.execute(
-            "SELECT username, sc, lc, wins, losses, games, level, xp, layout, title "
+            "SELECT username, sc, lc, wins, losses, games, level, xp, layout, title, "
+            "streak, max_streak, total_bets, total_won, total_lost, "
+            "overheat_score, last_spin_ts "
             "FROM users WHERE user_id=?",
             (user_id,)
         )
-        username, sc, lc, wins, losses, games, level, xp, layout, title = cur.fetchone()
+        (username, sc, lc, wins, losses, games, level, xp, layout, title,
+         streak, max_streak, total_bets, total_won, total_lost,
+         overheat_score, last_spin_ts) = cur.fetchone()
         return {
             "username": username, "sc": sc, "lc": lc,
             "wins": wins, "losses": losses, "games": games,
-            "level": level, "xp": xp, "layout": layout, "title": title
+            "level": level, "xp": xp, "layout": layout, "title": title,
+            "streak": streak or 0, "max_streak": max_streak or 0,
+            "total_bets": total_bets or 0,
+            "total_won": total_won or 0,
+            "total_lost": total_lost or 0,
+            "overheat_score": overheat_score or 0,
+            "last_spin_ts": last_spin_ts or 0,
         }
 
-    # ================= УРОВНИ/XP =================
+    # ================= УРОВНИ / XP =================
 
     def get_last_free_lc(self, user_id):
         self._ensure(user_id)
@@ -488,24 +565,18 @@ class DB:
             return False, "❌ Неизвестное помещение"
         if room_id in self.get_rooms(user_id):
             return False, "❌ Помещение уже открыто"
-
         room = self.ROOMS[room_id]
         cost = room["cost"]
         req = room["req"]
-
         user_level, _ = self.get_level_xp(user_id)
         if user_level < req:
             return False, f"❌ Нужен юзер-уровень {req}, у тебя {user_level}"
-
         lc = self.get_balance(user_id, "lc")
         if lc < cost:
             return False, f"❌ Нужно {cost} LC, у тебя {lc}"
-
         if room_id > 1 and (room_id - 1) not in self.get_rooms(user_id):
             return False, f"❌ Сначала открой зал №{room_id - 1}"
-
         self.collect_casino(user_id)
-
         self.add_balance(user_id, "lc", -cost)
         self.conn.execute(
             "INSERT INTO casino_rooms (user_id, room_id, opened_at) VALUES (?, ?, ?)",
@@ -591,35 +662,31 @@ class DB:
         self.conn.execute("UPDATE casinos SET name=? WHERE user_id=?", (name, user_id))
         self.conn.commit()
 
+    # ================= СОБЫТИЯ =================
+
     def try_trigger_event(self, user_id):
         casino = self.get_casino(user_id)
         if not casino:
             return None
         now = int(time.time())
-
         if casino["pending_event"] and casino["event_expires"] > now:
             return casino["pending_event"]
-
         if casino["pending_event"] and casino["event_expires"] <= now:
             self.conn.execute(
                 "UPDATE casinos SET pending_event=NULL, event_expires=0 WHERE user_id=?",
                 (user_id,)
             )
             self.conn.commit()
-
         if now - casino["last_event"] < self.EVENT_COOLDOWN:
             return None
-
         if random.random() > self.EVENT_CHANCE:
             self.conn.execute("UPDATE casinos SET last_event=? WHERE user_id=?", (now, user_id))
             self.conn.commit()
             return None
-
         event_type = random.choices(
             ["celebrity", "robbery", "big_visitor"],
             weights=[50, 30, 20]
         )[0]
-
         self.conn.execute(
             "UPDATE casinos SET pending_event=?, event_expires=?, last_event=? WHERE user_id=?",
             (event_type, now + self.EVENT_DURATION, now, user_id)
@@ -631,9 +698,7 @@ class DB:
         casino = self.get_casino(user_id)
         if not casino or casino["pending_event"] != event_type:
             return False, "❌ Событие уже неактивно"
-
         result = {"ok": True, "text": "", "amount": 0}
-
         if event_type == "celebrity":
             income = self.get_income_per_hour(user_id)
             bonus = income * 5
@@ -644,7 +709,6 @@ class DB:
             )
             result["text"] = f"🌟 Знаменитость оставила {bonus} LC чаевых!"
             result["amount"] = bonus
-
         elif event_type == "big_visitor":
             income = self.get_income_per_hour(user_id)
             bonus = income * 10
@@ -655,11 +719,9 @@ class DB:
             )
             result["text"] = f"🐋 Крупный игрок проиграл {bonus} LC!"
             result["amount"] = bonus
-
         elif event_type == "robbery":
             pending, _, _ = self.get_pending_income(user_id)
             steal_pct = 0.20
-
             if self.has_guard(user_id):
                 if random.random() < 0.85:
                     result["text"] = "💪 Охрана отбила ограбление! Ничего не потеряно."
@@ -691,7 +753,6 @@ class DB:
                         f"_Совет: найми 💪 Охрану, чтобы защититься._"
                     )
                     result["amount"] = -stolen
-
         self.conn.execute(
             "UPDATE casinos SET pending_event=NULL, event_expires=0 WHERE user_id=?",
             (user_id,)
@@ -705,6 +766,8 @@ class DB:
             (user_id,)
         )
         self.conn.commit()
+
+    # ================= ТОП КАЗИНО =================
 
     def top_casinos(self, limit=10):
         cur = self.conn.execute("""
@@ -829,11 +892,33 @@ class DB:
                 result[slot] = bid
         return result
 
+    def get_user_badges_full(self, user_id):
+        result = {}
+        cur = self.conn.execute(
+            "SELECT slot, badge_id, hp FROM user_badges WHERE user_id=?",
+            (user_id,)
+        )
+        for slot, bid, hp in cur.fetchall():
+            result[slot] = {"badge_id": bid, "hp": hp}
+        return result
+
     def set_user_badge(self, user_id, slot, badge_id):
+        from cosmetics import BADGES
+        badge = BADGES.get(badge_id)
+        hp = badge.get("hp", 1) if badge else 1
+        if hp == "inf":
+            hp = -1
         self.conn.execute(
-            "INSERT INTO user_badges (user_id, slot, badge_id) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, slot) DO UPDATE SET badge_id=excluded.badge_id",
-            (user_id, slot, badge_id)
+            "INSERT INTO user_badges (user_id, slot, badge_id, hp) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, slot) DO UPDATE SET badge_id=excluded.badge_id, hp=excluded.hp",
+            (user_id, slot, badge_id, hp)
+        )
+        self.conn.commit()
+
+    def set_badge_hp(self, user_id, slot, hp):
+        self.conn.execute(
+            "UPDATE user_badges SET hp=? WHERE user_id=? AND slot=?",
+            (hp, user_id, slot)
         )
         self.conn.commit()
 
@@ -846,13 +931,201 @@ class DB:
 
     def get_active_effects(self, user_id):
         try:
-            from cosmetics import BADGES
+            from item_system import get_total_effects
+            return get_total_effects(self, user_id)
         except Exception:
             return {}
-        effects = {}
-        for bid in self.get_user_badges(user_id).values():
-            if not bid or bid not in BADGES:
-                continue
-            for k, v in BADGES[bid].get("effect", {}).items():
-                effects[k] = effects.get(k, 0) + v
-        return effects
+
+    # ================= СТАТИСТИКА ДЛЯ УСЛОВИЙ =================
+
+    def get_extended_stats(self, user_id):
+        import time as _t
+        u = self.get_user(user_id)
+        rooms = self.get_rooms(user_id) or []
+        staff = self.get_staff(user_id) or []
+        equipped_badges = self.get_user_badges(user_id)
+
+        winrate = (u["wins"] / u["games"]) if u["games"] > 0 else 0.0
+
+        try:
+            from cosmetics import BADGES
+            legendary = sum(
+                1 for bid in equipped_badges.values()
+                if bid and bid in BADGES and BADGES[bid].get("rarity") == "legendary"
+            )
+        except Exception:
+            legendary = 0
+
+        now = _t.localtime()
+        oh_score = u.get("overheat_score", 0)
+        oh_stage = min(self.OVERHEAT_MAX_STAGE, oh_score // self.OVERHEAT_PER_STAGE)
+
+        return {
+            "user_level":         u["level"],
+            "user_sc":            u["sc"],
+            "user_lc":            u["lc"],
+            "user_games":         u["games"],
+            "user_wins":          u["wins"],
+            "user_losses":        u["losses"],
+            "user_xp":            u["xp"],
+            "user_streak":        u.get("streak", 0),
+            "user_max_streak":    u.get("max_streak", 0),
+            "user_winrate":       winrate,
+            "user_total_bets":    u.get("total_bets", 0),
+            "user_total_won":     u.get("total_won", 0),
+            "user_total_lost":    u.get("total_lost", 0),
+            "casino_level":       max(rooms) if rooms else 0,
+            "casino_rooms":       len(rooms),
+            "casino_staff":       len(staff),
+            "casino_income":      self.get_income_per_hour(user_id) if rooms else 0,
+            "badges_count":       sum(1 for b in equipped_badges.values() if b),
+            "badges_legendary":   legendary,
+            "hour_of_day":        now.tm_hour,
+            "day_of_week":        now.tm_wday,
+            # перегрев
+            "user_overheat":       oh_score,
+            "user_overheat_stage": oh_stage,
+        }
+
+    def add_streak_win(self, user_id):
+        self._ensure(user_id)
+        cur = self.conn.execute("SELECT streak, max_streak FROM users WHERE user_id=?", (user_id,))
+        streak, max_streak = cur.fetchone()
+        streak = (streak or 0) + 1
+        max_streak = max_streak or 0
+        if streak > max_streak:
+            max_streak = streak
+        self.conn.execute("UPDATE users SET streak=?, max_streak=? WHERE user_id=?",
+                          (streak, max_streak, user_id))
+        self.conn.commit()
+
+    def add_streak_loss(self, user_id):
+        self._ensure(user_id)
+        self.conn.execute("UPDATE users SET streak=0 WHERE user_id=?", (user_id,))
+        self.conn.commit()
+
+    def add_bet_stats(self, user_id, bet, win_amount):
+        self._ensure(user_id)
+        if win_amount > 0:
+            self.conn.execute(
+                "UPDATE users SET total_bets = total_bets + ?, total_won = total_won + ? WHERE user_id=?",
+                (bet, win_amount, user_id)
+            )
+        else:
+            self.conn.execute(
+                "UPDATE users SET total_bets = total_bets + ?, total_lost = total_lost + ? WHERE user_id=?",
+                (bet, bet, user_id)
+            )
+        self.conn.commit()
+
+    # ================= ПЕРЕГРЕВ =================
+
+    def get_overheat_stage(self, user_id):
+        """Возвращает (stage, score). Остывание -20 за 2 минуты."""
+        self._ensure(user_id)
+        cur = self.conn.execute(
+            "SELECT overheat_score, last_spin_ts FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        score, last = cur.fetchone()
+        score = score or 0
+        last = last or 0
+
+        now = int(time.time())
+        if last > 0 and score > 0:
+            minutes_blocks = (now - last) // 120  # блоков по 2 минуты
+            if minutes_blocks > 0:
+                score = max(0, score - minutes_blocks * self.OVERHEAT_COOL_PER_2MIN)
+                self.conn.execute(
+                    "UPDATE users SET overheat_score=? WHERE user_id=?",
+                    (score, user_id)
+                )
+                self.conn.commit()
+
+        stage = min(self.OVERHEAT_MAX_STAGE, score // self.OVERHEAT_PER_STAGE)
+        return stage, score
+
+    def add_overheat(self, user_id):
+        """+1 очко перегрева за спин. Максимум = 5 стадий * 20 = 100."""
+        self._ensure(user_id)
+        cur = self.conn.execute(
+            "SELECT overheat_score FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        score = (cur.fetchone()[0] or 0) + 1
+        cap = self.OVERHEAT_PER_STAGE * self.OVERHEAT_MAX_STAGE
+        score = min(score, cap)
+        self.conn.execute(
+            "UPDATE users SET overheat_score=?, last_spin_ts=? WHERE user_id=?",
+            (score, int(time.time()), user_id)
+        )
+        self.conn.commit()
+
+    def reset_overheat(self, user_id):
+        self.conn.execute(
+            "UPDATE users SET overheat_score=0 WHERE user_id=?",
+            (user_id,)
+        )
+        self.conn.commit()
+
+    # ================= АДМИНЫ =================
+
+    def add_admin(self, user_id, added_by=0):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO admins (user_id, added_by, added_at) VALUES (?, ?, ?)",
+            (user_id, added_by, int(time.time()))
+        )
+        self.conn.commit()
+
+    def remove_admin(self, user_id):
+        self.conn.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
+        self.conn.commit()
+
+    def is_db_admin(self, user_id):
+        cur = self.conn.execute("SELECT 1 FROM admins WHERE user_id=?", (user_id,))
+        return cur.fetchone() is not None
+
+    def get_db_admins(self):
+        cur = self.conn.execute(
+            "SELECT user_id, added_by, added_at FROM admins ORDER BY added_at"
+        )
+        return cur.fetchall()
+
+    # ================= ЛОГ =================
+
+    def log_admin(self, admin_id, command, args=""):
+        try:
+            self.conn.execute(
+                "INSERT INTO admin_log (admin_id, command, args, timestamp) VALUES (?, ?, ?, ?)",
+                (admin_id, command, args, int(time.time()))
+            )
+            self.conn.commit()
+        except Exception:
+            pass
+
+    def get_admin_log(self, limit=20):
+        cur = self.conn.execute(
+            "SELECT admin_id, command, args, timestamp FROM admin_log "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        return cur.fetchall()
+
+    def clear_admin_log(self):
+        self.conn.execute("DELETE FROM admin_log")
+        self.conn.commit()
+
+    # ================= УДАЛЕНИЕ ЮЗЕРА =================
+
+    def delete_user(self, user_id):
+        self.conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM user_badges WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM casinos WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM casino_rooms WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM casino_staff WHERE user_id=?", (user_id,))
+        self.conn.execute("DELETE FROM inventory WHERE user_id=?", (user_id,))
+        self.conn.commit()
+
+    def user_exists(self, user_id):
+        cur = self.conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        return cur.fetchone() is not None

@@ -1,0 +1,181 @@
+"""
+Парсер эффектов значков.
+EFFECT: "set.переменная = значение"  или  "give.переменная = значение"
+HARD_EFFECT: список блоков с if/elif/else
+"""
+
+import random
+
+
+# ---------- ПАРСЕР СТРОКИ ----------
+
+def parse_effect_string(s: str):
+    """
+    "set.mult_bonus = 0.10"  →  ("set", "mult_bonus", 0.1)
+    "give.user_sc = 1000"    →  ("give", "user_sc", 1000)
+    """
+    if not s:
+        return None
+    s = s.strip()
+    if "=" not in s:
+        return None
+    left, right = s.split("=", 1)
+    left, right = left.strip(), right.strip()
+    if "." not in left:
+        return None
+    action, var = left.split(".", 1)
+    action = action.strip().lower()
+    var = var.strip()
+
+    try:
+        if right.replace(".", "", 1).lstrip("-").isdigit():
+            val = float(right) if "." in right else int(right)
+        else:
+            val = float(right)
+    except ValueError:
+        return None
+    return action, var, val
+
+
+# ---------- УСЛОВИЯ ----------
+
+_OPS = [">=", "<=", "!=", "=", ">", "<", "!"]
+
+
+def _eval_part(part: str, stats: dict) -> bool:
+    part = part.strip()
+    for op in _OPS:
+        if op in part:
+            left, right = part.split(op, 1)
+            left, right = left.strip(), right.strip()
+            left_val = stats.get(left, 0)
+            try:
+                if right.replace(".", "", 1).lstrip("-").isdigit():
+                    right_val = float(right) if "." in right else int(right)
+                else:
+                    right_val = float(right)
+            except ValueError:
+                right_val = right
+            try:
+                lv = float(left_val)
+                rv = float(right_val)
+                if op == "=":  return lv == rv
+                if op == "!=": return lv != rv
+                if op == ">":  return lv > rv
+                if op == ">=": return lv >= rv
+                if op == "<":  return lv < rv
+                if op == "<=": return lv <= rv
+            except (ValueError, TypeError):
+                return False
+    return False
+
+
+def eval_condition(cond_str: str, stats: dict) -> bool:
+    """# = И, | = ИЛИ"""
+    if not cond_str:
+        return False
+    for or_part in cond_str.split("|"):
+        and_parts = [p.strip() for p in or_part.split("#")]
+        if all(_eval_part(p, stats) for p in and_parts):
+            return True
+    return False
+
+
+# ---------- ПРИМЕНЕНИЕ ЭФФЕКТОВ ----------
+
+def apply_effects(effect_strings, effects: dict):
+    for s in effect_strings:
+        parsed = parse_effect_string(s)
+        if not parsed:
+            continue
+        action, var, val = parsed
+        if action == "set":
+            effects[var] = val
+        elif action == "give":
+            effects[var] = effects.get(var, 0) + val
+
+
+def get_badge_effects(badge: dict, stats: dict) -> dict:
+    """Эффекты одного значка (effect + hard_effect)."""
+    effects = {}
+    if badge.get("effect"):
+        apply_effects([badge["effect"]], effects)
+
+    hard = badge.get("hard_effect", [])
+    for block in hard:
+        if "if" in block:
+            if eval_condition(block["if"], stats):
+                apply_effects([block.get("then", "")], effects)
+                return effects
+        elif "elif" in block:
+            if eval_condition(block["elif"], stats):
+                apply_effects([block.get("then", "")], effects)
+                return effects
+        elif "else" in block:
+            apply_effects([block.get("else", "")], effects)
+            return effects
+    return effects
+
+
+def get_total_effects(brain, user_id: int) -> dict:
+    """Все эффекты от значков."""
+    from cosmetics import BADGES
+
+    stats = brain.db.get_extended_stats(user_id)
+    effects = {}
+
+    for bid in brain.db.get_user_badges(user_id).values():
+        if bid and bid in BADGES:
+            badge_eff = get_badge_effects(BADGES[bid], stats)
+            for k, v in badge_eff.items():
+                effects[k] = effects.get(k, 0) + v
+
+    return effects
+
+
+# ---------- ПОЛОМКА ЗНАЧКОВ ----------
+
+def should_break(badge: dict, trigger: str) -> bool:
+    if badge.get("hp") == "inf":
+        return False
+    if trigger not in badge.get("break_on", []):
+        return False
+    return random.random() < badge.get("break_chance", 0)
+
+
+def handle_break(brain, user_id: int, badge_id: str, slot: int):
+    from cosmetics import BADGES
+    badge = BADGES.get(badge_id)
+    if not badge:
+        return None
+    brain.db.remove_user_badge(user_id, slot)
+    after = badge.get("after_break", {"type": "NOTHING"})
+    t = after.get("type", "NOTHING")
+    if t == "NOTHING":
+        return f"💔 <b>{badge['name']}</b> сломался и пропал."
+    if t == "GET_SC":
+        amt = after.get("amount", 0)
+        brain.db.add_balance(user_id, "sc", amt)
+        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} SC."
+    if t == "GET_LC":
+        amt = after.get("amount", 0)
+        brain.db.add_balance(user_id, "lc", amt)
+        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} LC."
+    if t == "GET_ITEM":
+        new_id = after.get("item_id")
+        if new_id and new_id in BADGES:
+            # Новый значок попадает в первый свободный слот
+            equipped = brain.db.get_user_badges(user_id)
+            free_slot = None
+            for i in range(5):
+                if not equipped.get(i):
+                    free_slot = i
+                    break
+            if free_slot is not None:
+                brain.db.set_user_badge(user_id, free_slot, new_id)
+                return f"💔 <b>{badge['name']}</b> сломался! Взамен <b>{BADGES[new_id]['name']}</b>."
+            else:
+                # нет свободного слота — дадим SC
+                brain.db.add_balance(user_id, "sc", 500)
+                return f"💔 <b>{badge['name']}</b> сломался! Слотов нет, +500 SC."
+    return f"💔 <b>{badge['name']}</b> сломался."
