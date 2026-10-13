@@ -39,7 +39,7 @@ def parse_effect_string(s: str):
 
 # ---------- УСЛОВИЯ ----------
 
-_OPS = [">=", "<=", "!=", "=", ">", "<", "!"]
+_OPS = [">=", "<=", "!=", ">", "<", "=", "!"]
 
 
 def _eval_part(part: str, stats: dict) -> bool:
@@ -198,7 +198,7 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_ITEM":
         new_id = after.get("item_id")
         if new_id and new_id in BADGES:
-            # Новый значок попадает в первый свободный слот
+            # Новая медаль занимает первый свободный слот.
             level = brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
             equipped = brain.db.get_user_badges(user_id)
