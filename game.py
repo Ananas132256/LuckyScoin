@@ -110,7 +110,7 @@ class Game:
     }
 
     SPIN_ANIM = {
-        "common":   {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.00, "last_stop_delay": 2.00, "label": "▶️"},
+        "common":   {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.05, "last_stop_delay": 2.00, "label": "▶️"},
         "uncommon": {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.10, "last_stop_delay": 2.20, "label": "⚡"},
         "rare":     {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.20, "last_stop_delay": 2.40, "label": "💫"},
         "ultra":    {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.30, "last_stop_delay": 2.60, "label": "🔥"},
@@ -318,8 +318,7 @@ class Game:
         base_delay = cfg["spin_delay"]
         for i in range(frames):
             rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            progress = (i + 1) / frames
-            speed = "⏩ ⏩ ▶️" if progress < 1 else "⏩ ▶️ ▶️"
+            speed = "⏩ ⏩ ▶️" if i + 1 < frames else "⏩ ▶️ ▶️"
             await self._render(message, name, bet, rnd,
                                f"{cfg['label']} <i>Крутим...</i> {speed}")
             await asyncio.sleep(base_delay)
@@ -350,7 +349,7 @@ class Game:
             message, name, bet, " | ".join(shown),
             "🔥 <b>ВОЗГОРАНИЕ!</b> <i>Ячейки загорелись...</i>"
         )
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1.05)
 
     def _apply_chain_explosion(self, symbols):
         line = list(symbols)
@@ -383,7 +382,7 @@ class Game:
 
         return line, explosions, chain_order
 
-    async def _anim_explosion(self, message, name, bet, old_symbols, new_symbols, chain_order):
+    async def _anim_explosion(self, message, name, bet, new_symbols, chain_order):
         if not chain_order:
             return
 
@@ -391,7 +390,7 @@ class Game:
             message, name, bet, " | ".join(new_symbols),
             f"💥 <b>Цепная реакция: {len(chain_order)}!</b> <i>Всё полыхает...</i>"
         )
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1.05)
 
     async def _anim_reroll(self, message, name, bet, reroll_count, verdict, total):
         if verdict.get("reason") == "pattern":
@@ -401,13 +400,13 @@ class Game:
         extra = f"🔄 Реролл <b>#{reroll_count}</b> • Копилка: <b>x{total:g}</b>"
         rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
         await self._render(message, name, bet, rnd, header, extra)
-        await asyncio.sleep(0.20)
+        await asyncio.sleep(1.05)
 
     async def _anim_win(self, message, name, bet, symbols, description):
         line = " | ".join(symbols)
         await self._render(message, name, bet, line,
                            f"🎉 <b>ВЫИГРЫШ!</b> ✨ 🎉 ✨\n<i>{description}</i>")
-        await asyncio.sleep(0.28)
+        await asyncio.sleep(1.05)
 
     async def _anim_bomb(self, message, name, bet, symbols, description):
         line = " | ".join(symbols)
@@ -415,12 +414,12 @@ class Game:
             message, name, bet, line,
             f"💣 <b>ВЗРЫВ!</b> 🧨\n<i>{description}</i>"
         )
-        await asyncio.sleep(0.28)
+        await asyncio.sleep(1.05)
 
     async def _anim_loss(self, message, name, bet, symbols):
         line = " | ".join(symbols)
         await self._render(message, name, bet, line, "😔 <i>Ничего не выпало...</i>")
-        await asyncio.sleep(0.55)
+        await asyncio.sleep(1.05)
 
     # ---------- ГЛАВНЫЙ ЦИКЛ ----------
 
@@ -459,7 +458,7 @@ class Game:
             total_explosions += explosions
             if explosions > 0:
                 await self._anim_explosion(
-                    message, name, bet, symbols_before_chain, symbols, chain_order
+                    message, name, bet, symbols, chain_order
                 )
 
             verdict = self._evaluate(symbols, effects)
