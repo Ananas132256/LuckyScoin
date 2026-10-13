@@ -77,7 +77,9 @@ class Game:
         "epic":      8,
         "legendary": 1,
     }
-    FULL_SET_COMPENSATION_SC = 1000  # ≈ 1 000 000 LC эквивалента
+    # Компенсация в LC, если у игрока нет свободного слота под значок.
+    # Платим LC, а не SC — SC должен оставаться редким.
+    NO_SLOT_COMPENSATION_LC = 2000   # ≈ 2 SC по курсу 1000 LC = 1 SC
 
     PATTERNS = [
         {"name": "Пирамида", "pattern": ("A", "B", "C", "B", "A"), "action": "reroll", "mult": 1.1},
@@ -184,17 +186,11 @@ class Game:
                 None,
             )
             if slot is None:
-                amount = self.FULL_SET_COMPENSATION_SC
-                self.brain.db.add_balance(user_id, "sc", amount)
-                return f"🎁 Все слоты заняты! Начислено <b>{amount} SC</b>."
+                amount = self.NO_SLOT_COMPENSATION_LC
+                self.brain.db.add_balance(user_id, "lc", amount)
+                return f"🎁 Все слоты заняты! Начислено <b>{amount} LC</b>."
 
             badge_id = self._pick_random_badge(user_id)
-            if badge_id is None:
-                # Защитная ветка: с текущим числом значков она не должна срабатывать.
-                amount = self.FULL_SET_COMPENSATION_SC
-                self.brain.db.add_balance(user_id, "sc", amount)
-                return f"🎁 Все значки уже собраны! Начислено <b>{amount} SC</b>."
-
             name = BADGES[badge_id]["name"]
             self.brain.db.set_user_badge(user_id, slot, badge_id)
             return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
@@ -825,10 +821,10 @@ class Game:
     async def cb_exchange(self, query: CallbackQuery):
         user_id = query.from_user.id
         lc = self.brain.db.get_balance(user_id, "lc")
-        if lc < 20:
-            return await query.answer(f"Нужно 20 LC.", show_alert=True)
-        amount = (lc // 20) * 20
-        sc = amount // 20
+        if lc < 1000:
+            return await query.answer("Нужно минимум 1000 LC.", show_alert=True)
+        amount = (lc // 1000) * 1000
+        sc = amount // 1000
         self.brain.db.add_balance(user_id, "lc", -amount)
         self.brain.db.add_balance(user_id, "sc", sc)
         await query.answer(f"💱 {amount} LC → {sc} SC!", show_alert=True)
