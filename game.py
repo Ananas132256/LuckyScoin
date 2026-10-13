@@ -434,7 +434,17 @@ class Game:
         penalty_per_fire = self.FIRE_PENALTY * (1 - min(fire_reduction, 1.0))
         fire_factor = max(0.0, 1 - penalty_per_fire * fire_count)
 
-        win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor) if effective_mult > 0 else 0
+        win_amount = math.ceil(bet * effective_mult * spin_mult * fire_factor)
+
+        applied_loss = 0
+        loss_was_capped = False
+        if win_amount < 0:
+            # The bet is already deducted, so cap the bomb penalty to the remaining LC.
+            current_lc = self.brain.db.get_balance(user_id, "lc")
+            applied_loss = min(abs(win_amount), max(0, current_lc))
+            loss_was_capped = applied_loss < abs(win_amount)
+            if applied_loss:
+                self.brain.db.add_balance(user_id, "lc", -applied_loss)
 
         if win_amount > 0:
             self.brain.db.add_balance(user_id, "lc", win_amount)
@@ -508,7 +518,10 @@ class Game:
                 result += f" <i>(+{int(mult_bonus*100)}% от значков)</i>"
             result += "\n"
         elif win_amount < 0:
-            result += f"💣 <b>{win_amount} LC</b>\n"
+            result += f"💣 <b>-{applied_loss} LC</b>"
+            if loss_was_capped:
+                result += " <i>(баланс не может уйти в минус)</i>"
+            result += "\n"
         else:
             result += "❌ Ничего...\n"
 
