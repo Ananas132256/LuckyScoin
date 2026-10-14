@@ -50,14 +50,24 @@ class Inventory:
         return u, room_level
 
     def _owned_badges(self, u: dict, room_level: int):
-        return {
-            bid for bid, badge in BADGES.items()
-            if (
-                self.brain.db.has_item(u["user_id"], badge["shop_id"])
-                if badge.get("price_sc") and badge.get("shop_id")
-                else is_unlocked(badge, u, room_level)
-            )
+        user_id = u["user_id"]
+        result = {
+            bid
+            for bid, badge in BADGES.items()
+            if badge.get("shop_id")
+            and self.brain.db.has_item(user_id, badge["shop_id"]) > 0
         }
+        result.update(
+            bid
+            for bid, badge in BADGES.items()
+            if not badge.get("price_sc") and is_unlocked(badge, u, room_level)
+        )
+        equipped = self.brain.db.get_user_badges(user_id)
+        result.update(
+            bid for bid in equipped.values()
+            if bid in BADGES
+        )
+        return result
 
     def _owned_titles(self, u: dict, room_level: int):
         user_id = u.get("user_id")
@@ -641,13 +651,34 @@ class Inventory:
     async def cb_badge_remove(self, query: CallbackQuery):
         try:
             slot = int(query.data.replace("inv_badge_remove_", ""))
+            if slot < 0 or slot >= 5:
+                return await safe_answer(query, "Ячейка не найдена.", show_alert=True)
+
+            user_id = query.from_user.id
+            equipped = self.brain.db.get_user_badges_full(user_id)
+            info = equipped.get(slot)
+            if not info:
+                return await safe_answer(query, "Слот пуст.", show_alert=True)
+
+            badge_id = info["badge_id"]
+            badge = BADGES.get(badge_id)
+            if badge and badge.get("shop_id"):
+                shop_id = badge["shop_id"]
+                if self.brain.db.has_item(user_id, shop_id) < 1:
+                    self.brain.db.add_item(user_id, shop_id, 1)
+                self.brain.db.remove_user_badge(user_id, slot)
+                await safe_answer(query, f"Снято: {badge['name']}")
+            else:
+                self.brain.db.remove_user_badge(user_id, slot)
+                await safe_answer(query, "Снято.")
+
+            query.data = f"inv_slot_{slot}"
+            await self.cb_slot(query)
         except ValueError:
-            return await query.answer("Ошибка", show_alert=True)
-        user_id = query.from_user.id
-        self.brain.db.remove_user_badge(user_id, slot)
-        await query.answer("❌ Значок снят")
-        query.data = f"inv_slot_{slot}"
-        await self.cb_slot(query)
+            await safe_answer(query, "Ошибка", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка снятия медали: {error}")
+            await safe_answer(query, "Не удалось снять медаль.", show_alert=True)
 
     # ---------- ТИТУЛЫ ----------
 

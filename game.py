@@ -200,31 +200,34 @@ class Game:
         try:
             from cosmetics import BADGES, badge_slots_for_level
 
-            # Учитываем только слоты, доступные игроку по уровню.
+            badge_id = self._pick_random_badge(user_id)
+            if badge_id is None:
+                amount = self.NO_SLOT_COMPENSATION_LC
+                self.brain.db.add_balance(user_id, "lc", amount)
+                return f"🎁 Все значки уже собраны! Начислено <b>{amount} LC</b>."
+
+            badge = BADGES.get(badge_id)
+            if not badge or not badge.get("shop_id"):
+                return None
+
+            # Сначала сохраняем медаль в инвентаре, затем пробуем надеть.
+            self.brain.db.add_item(user_id, badge["shop_id"], 1)
+
             level = self.brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
             equipped = self.brain.db.get_user_badges(user_id)
-
             slot = next(
                 (i for i in range(max_slots) if not equipped.get(i)),
                 None,
             )
             if slot is None:
-                amount = self.NO_SLOT_COMPENSATION_LC
-                self.brain.db.add_balance(user_id, "lc", amount)
-                return f"🎁 Все слоты заняты! Начислено <b>{amount} LC</b>."
+                return f"🎁 Выпал значок: <b>{badge['name']}</b>, он добавлен в инвентарь."
 
-            badge_id = self._pick_random_badge(user_id)
-            if badge_id is None:
-                # Защита на будущее: если значков станет меньше, чем слотов.
-                amount = self.NO_SLOT_COMPENSATION_LC
-                self.brain.db.add_balance(user_id, "lc", amount)
-                return f"🎁 Все значки уже собраны! Начислено <b>{amount} LC</b>."
-
-            name = BADGES[badge_id]["name"]
             self.brain.db.set_user_badge(user_id, slot, badge_id)
+            name = badge["name"]
             return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
-        except Exception:
+        except Exception as error:
+            print(f"⚠️ Ошибка выдачи медали: {error}")
             return None
 
     # ---------- ГЕНЕРАЦИЯ ----------

@@ -1263,32 +1263,60 @@ class DB:
                 })
         return owned
 
-    def transfer_badge(self, from_id, to_id, badge_id):
-        """Передаёт одну медаль, сохраняя её прочность при переносе из слота."""
-        from cosmetics import BADGES, badge_slots_for_level
+    def transfer_badge(self, from_id, to_id, badge_id, from_slot=None):
+        """Передаёт одну медаль в инвентарь получателя."""
+        from cosmetics import BADGES
 
         badge = BADGES.get(badge_id)
-        if not badge:
+        if not badge or not badge.get("shop_id"):
             return False
 
+        shop_id = badge["shop_id"]
         try:
             self.conn.execute("BEGIN IMMEDIATE")
-            cur = self.conn.execute(
-                "SELECT slot, hp, roll_count FROM user_badges "
-                "WHERE user_id=? AND badge_id=? ORDER BY slot LIMIT 1",
-                (from_id, badge_id)
-            )
-            equipped = cur.fetchone()
-            if equipped:
-                source_slot, hp, roll_count = equipped
-                self.conn.execute(
-                    "DELETE FROM user_badges WHERE user_id=? AND slot=?",
-                    (from_id, source_slot)
+            if from_slot is not None:
+                cur = self.conn.execute(
+                    "SELECT slot FROM user_badges "
+                    "WHERE user_id=? AND slot=? AND badge_id=?",
+                    (from_id, from_slot, badge_id)
                 )
             else:
                 cur = self.conn.execute(
+                    "SELECT slot FROM user_badges "
+                    "WHERE user_id=? AND badge_id=? ORDER BY slot LIMIT 1",
+                    (from_id, badge_id)
+                )
+            equipped = cur.fetchone()
+            if equipped:
+                self.conn.execute(
+                    "DELETE FROM user_badges WHERE user_id=? AND slot=?",
+                    (from_id, equipped[0])
+                )
+                cur = self.conn.execute(
                     "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
-                    (from_id, badge["shop_id"])
+                    (from_id, shop_id)
+                )
+                inventory_item = cur.fetchone()
+                if inventory_item and inventory_item[0] > 0:
+                    quantity = inventory_item[0] - 1
+                    if quantity:
+                        self.conn.execute(
+                            "UPDATE inventory SET quantity=? "
+                            "WHERE user_id=? AND item_id=?",
+                            (quantity, from_id, shop_id)
+                        )
+                    else:
+                        self.conn.execute(
+                            "DELETE FROM inventory WHERE user_id=? AND item_id=?",
+                            (from_id, shop_id)
+                        )
+            else:
+                if from_slot is not None:
+                    self.conn.rollback()
+                    return False
+                cur = self.conn.execute(
+                    "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
+                    (from_id, shop_id)
                 )
                 inventory_item = cur.fetchone()
                 if not inventory_item or inventory_item[0] <= 0:
@@ -1298,46 +1326,20 @@ class DB:
                 if quantity:
                     self.conn.execute(
                         "UPDATE inventory SET quantity=? WHERE user_id=? AND item_id=?",
-                        (quantity, from_id, badge["shop_id"])
+                        (quantity, from_id, shop_id)
                     )
                 else:
                     self.conn.execute(
                         "DELETE FROM inventory WHERE user_id=? AND item_id=?",
-                        (from_id, badge["shop_id"])
+                        (from_id, shop_id)
                     )
-                hp = badge.get("hp", 1)
-                if hp == "inf":
-                    hp = -1
-                roll_count = 0
 
-            cur = self.conn.execute(
-                "SELECT level FROM users WHERE user_id=?", (to_id,)
+            self.conn.execute(
+                "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, 1) "
+                "ON CONFLICT(user_id, item_id) "
+                "DO UPDATE SET quantity=quantity+1",
+                (to_id, shop_id)
             )
-            row = cur.fetchone()
-            level = row[0] if row else 0
-            max_slots = badge_slots_for_level(level)
-            cur = self.conn.execute(
-                "SELECT slot FROM user_badges WHERE user_id=?", (to_id,)
-            )
-            occupied = {row[0] for row in cur.fetchall()}
-            free_slot = next(
-                (slot for slot in range(max_slots) if slot not in occupied),
-                None,
-            )
-
-            if free_slot is not None:
-                self.conn.execute(
-                    "INSERT INTO user_badges "
-                    "(user_id, slot, badge_id, hp, roll_count) VALUES (?, ?, ?, ?, ?)",
-                    (to_id, free_slot, badge_id, hp, roll_count)
-                )
-            else:
-                self.conn.execute(
-                    "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, 1) "
-                    "ON CONFLICT(user_id, item_id) "
-                    "DO UPDATE SET quantity=quantity+1",
-                    (to_id, badge["shop_id"])
-                )
             self.conn.commit()
             return True
         except Exception:

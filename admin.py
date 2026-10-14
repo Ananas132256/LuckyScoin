@@ -448,6 +448,16 @@ class Admin:
                 parse_mode="HTML"
             )
 
+        badge = BADGES[badge_id]
+        shop_id = badge.get("shop_id")
+        if not shop_id:
+            return await message.answer(
+                "❌ У медали нет shop_id.",
+                parse_mode="HTML"
+            )
+
+        self.brain.db.add_item(target_id, shop_id, 1)
+
         equipped = self.brain.db.get_user_badges(target_id)
         free_slot = None
         for i in range(5):
@@ -455,17 +465,14 @@ class Admin:
                 free_slot = i
                 break
 
-        if free_slot is None:
-            return await message.answer(
-                f"❌ У юзера <code>{target_id}</code> все 5 слотов заняты. /removebadge",
-                parse_mode="HTML"
-            )
-
-        self.brain.db.set_user_badge(target_id, free_slot, badge_id)
-        badge = BADGES[badge_id]
+        if free_slot is not None:
+            self.brain.db.set_user_badge(target_id, free_slot, badge_id)
+            result = f"и надета в слот <b>{free_slot + 1}</b>"
+        else:
+            result = "добавлена в инвентарь (все слоты заняты)"
         await message.answer(
-            f"✅ Медаль <b>{badge['name']}</b> выдана юзеру <code>{target_id}</code>\n"
-            f"Слот: <b>{free_slot + 1}</b>",
+            f"✅ Медаль <b>{badge['name']}</b> выдана юзеру "
+            f"<code>{target_id}</code> {result}.",
             parse_mode="HTML"
         )
 
