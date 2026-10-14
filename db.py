@@ -180,7 +180,7 @@ class DB:
                 badge_id TEXT,
                 hp INTEGER NOT NULL,
                 roll_count INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (user_id, slot)
+                PRIMARY KEY (user_id, slot, badge_id)
             )
         """)
 
@@ -271,6 +271,41 @@ class DB:
         if "roll_count" not in badge_cols:
             self.conn.execute(
                 "ALTER TABLE user_badges ADD COLUMN roll_count INTEGER DEFAULT 0"
+            )
+
+        state_pk = tuple(
+            row[1]
+            for row in sorted(
+                (
+                    row for row in self.conn.execute(
+                        "PRAGMA table_info(user_badge_slot_state)"
+                    ).fetchall()
+                    if row[5] > 0
+                ),
+                key=lambda row: row[5],
+            )
+        )
+        if state_pk != ("user_id", "slot", "badge_id"):
+            self.conn.execute("""
+                CREATE TABLE user_badge_slot_state_new (
+                    user_id INTEGER,
+                    slot INTEGER,
+                    badge_id TEXT,
+                    hp INTEGER NOT NULL,
+                    roll_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, slot, badge_id)
+                )
+            """)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO user_badge_slot_state_new "
+                "(user_id, slot, badge_id, hp, roll_count) "
+                "SELECT user_id, slot, badge_id, hp, roll_count "
+                "FROM user_badge_slot_state"
+            )
+            self.conn.execute("DROP TABLE user_badge_slot_state")
+            self.conn.execute(
+                "ALTER TABLE user_badge_slot_state_new "
+                "RENAME TO user_badge_slot_state"
             )
 
     # ================= INIT ITEMS =================
@@ -1406,30 +1441,42 @@ class DB:
             hp = -1
         roll_count = 0
         current = self.conn.execute(
-            "SELECT badge_id FROM user_badges WHERE user_id=? AND slot=?",
-            (user_id, slot),
-        ).fetchone()
-        saved_state = self.conn.execute(
-            "SELECT badge_id, hp, roll_count FROM user_badge_slot_state "
+            "SELECT badge_id, hp, roll_count FROM user_badges "
             "WHERE user_id=? AND slot=?",
             (user_id, slot),
         ).fetchone()
-        if current is None and saved_state and saved_state[0] == badge_id:
-            _, hp, roll_count = saved_state
+        if current and current[0] != badge_id:
+            # Persist replaced gear here so every caller preserves its wear.
+            self.conn.execute(
+                "INSERT INTO user_badge_slot_state "
+                "(user_id, slot, badge_id, hp, roll_count) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, slot, badge_id) DO UPDATE SET "
+                "hp=excluded.hp, roll_count=excluded.roll_count",
+                (user_id, slot, *current),
+            )
+        saved_state = self.conn.execute(
+            "SELECT hp, roll_count FROM user_badge_slot_state "
+            "WHERE user_id=? AND slot=? AND badge_id=?",
+            (user_id, slot, badge_id),
+        ).fetchone()
+        if saved_state:
+            hp, roll_count = saved_state
         self.conn.execute(
             "INSERT INTO user_badges (user_id, slot, badge_id, hp, roll_count) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(user_id, slot) DO UPDATE SET "
             "roll_count=CASE WHEN badge_id != excluded.badge_id "
-            "THEN 0 ELSE roll_count END, "
+            "THEN excluded.roll_count ELSE roll_count END, "
             "badge_id=excluded.badge_id, "
             "hp=CASE WHEN badge_id != excluded.badge_id "
             "THEN excluded.hp ELSE hp END",
             (user_id, slot, badge_id, hp, roll_count)
         )
         self.conn.execute(
-            "DELETE FROM user_badge_slot_state WHERE user_id=? AND slot=?",
-            (user_id, slot),
+            "DELETE FROM user_badge_slot_state "
+            "WHERE user_id=? AND slot=? AND badge_id=?",
+            (user_id, slot, badge_id),
         )
         self.conn.commit()
 
@@ -1473,15 +1520,16 @@ class DB:
                 "INSERT INTO user_badge_slot_state "
                 "(user_id, slot, badge_id, hp, roll_count) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(user_id, slot) DO UPDATE SET "
-                "badge_id=excluded.badge_id, hp=excluded.hp, "
+                "ON CONFLICT(user_id, slot, badge_id) DO UPDATE SET "
+                "hp=excluded.hp, "
                 "roll_count=excluded.roll_count",
                 (user_id, slot, *badge),
             )
-        elif not preserve_state:
+        elif badge and not preserve_state:
             self.conn.execute(
-                "DELETE FROM user_badge_slot_state WHERE user_id=? AND slot=?",
-                (user_id, slot),
+                "DELETE FROM user_badge_slot_state "
+                "WHERE user_id=? AND slot=? AND badge_id=?",
+                (user_id, slot, badge[0]),
             )
         self.conn.execute(
             "DELETE FROM user_badges WHERE user_id=? AND slot=?",
@@ -1684,6 +1732,10 @@ class DB:
     def delete_user(self, user_id):
         self.conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
         self.conn.execute("DELETE FROM user_badges WHERE user_id=?", (user_id,))
+        self.conn.execute(
+            "DELETE FROM user_badge_slot_state WHERE user_id=?",
+            (user_id,),
+        )
         self.conn.execute("DELETE FROM casinos WHERE user_id=?", (user_id,))
         self.conn.execute("DELETE FROM casino_rooms WHERE user_id=?", (user_id,))
         self.conn.execute("DELETE FROM casino_staff WHERE user_id=?", (user_id,))
