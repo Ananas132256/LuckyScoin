@@ -1,3 +1,12 @@
+"""
+Player-to-player trade.
+
+Economy note: the SC fee (TRADE_FEE_BURN_PERCENT) is intentionally
+BURNED, not credited to any user. It acts as an SC sink to keep
+inflation under control. Do not "fix" this as a bug without
+consulting the balance team.
+"""
+
 import html
 import time
 
@@ -6,16 +15,11 @@ from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
+from utils import safe_answer
 
 
-TRADE_FEE_PERCENT = 5   # комиссия в SC (сжигается)
-
-
-async def safe_answer(query, *args, **kwargs):
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
+TRADE_FEE_BURN_PERCENT = 5
+TRADE_TTL_SECONDS = 24 * 3600
 
 
 class Trade:
@@ -23,6 +27,27 @@ class Trade:
         self.brain = brain
         self.pending = {}   # {trade_id: {...}}
         self.counter = 0
+
+    async def _prune_expired(self):
+        now = time.time()
+        expired = [
+            trade_id
+            for trade_id, trade in self.pending.items()
+            if now - trade["ts"] > TRADE_TTL_SECONDS
+        ]
+        for trade_id in expired:
+            trade = self.pending.pop(trade_id)
+            for user_id in (trade["from_id"], trade["to_id"]):
+                try:
+                    await self.brain.bot.send_message(
+                        user_id,
+                        f"⌛ Предложение трейда #{trade_id} истекло.",
+                    )
+                except Exception as error:
+                    print(
+                        f"Ошибка уведомления об истечении трейда "
+                        f"#{trade_id} для {user_id}: {error}"
+                    )
 
     def register(self, dp: Dispatcher):
         dp.message(Command("trade"))(self.cmd_trade)
@@ -59,7 +84,7 @@ class Trade:
     def _fee_for(self, asset):
         if asset["type"] != "sc":
             return 0
-        return max(1, (asset["amount"] * TRADE_FEE_PERCENT) // 100)
+        return max(1, (asset["amount"] * TRADE_FEE_BURN_PERCENT) // 100)
 
     def _owns_badge(self, user_id, badge_id):
         return any(
@@ -78,7 +103,7 @@ class Trade:
                 "<code>/trade @vasya badge:leaf 500</code>\n"
                 "<code>/trade @vasya 500 badge:d6_full</code>\n"
                 "<code>/trade @vasya badge:leaf badge:four_leaf_clover</code>\n\n"
-                f"Комиссия: {TRADE_FEE_PERCENT}% с SC, которые платит принимающий."
+                f"Комиссия: {TRADE_FEE_BURN_PERCENT}% с SC, которые платит принимающий."
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -154,6 +179,7 @@ class Trade:
 
     async def cmd_trade(self, message: Message):
         try:
+            await self._prune_expired()
             parts = (message.text or "").split()
             if len(parts) != 4:
                 return await message.answer(
@@ -248,6 +274,7 @@ class Trade:
 
     async def cb_accept(self, query: CallbackQuery):
         try:
+            await self._prune_expired()
             trade_id = int(query.data.removeprefix("trade_accept_"))
             trade = self.pending.get(trade_id)
             if not trade:
@@ -325,6 +352,7 @@ class Trade:
                         )
                         return await safe_answer(query, message, show_alert=True)
 
+                # Fee is burned: subtracted from the buyer, credited to no one.
                 # Сначала списываем валюту и медали.
                 if give["type"] == "sc":
                     conn.execute(

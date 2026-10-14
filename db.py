@@ -1,6 +1,21 @@
 import sqlite3
 import random
 import time
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _purchasable_cosmetic_ids():
+    from cosmetics import BADGES, TITLES
+
+    return frozenset(
+        cosmetic["shop_id"]
+        for cosmetic in (*BADGES.values(), *TITLES.values())
+        if isinstance(cosmetic.get("shop_id"), int)
+        and cosmetic["shop_id"] > 0
+        and isinstance(cosmetic.get("price_sc"), int)
+        and cosmetic["price_sc"] > 0
+    )
 
 
 class DB:
@@ -472,19 +487,6 @@ class DB:
         self.conn.execute("UPDATE shop_meta SET next_refresh=0 WHERE id=1")
         self.conn.commit()
 
-    @staticmethod
-    def _purchasable_cosmetic_ids():
-        from cosmetics import BADGES, TITLES
-
-        return {
-            cosmetic["shop_id"]
-            for cosmetic in (*BADGES.values(), *TITLES.values())
-            if isinstance(cosmetic.get("shop_id"), int)
-            and cosmetic["shop_id"] > 0
-            and isinstance(cosmetic.get("price_sc"), int)
-            and cosmetic["price_sc"] > 0
-        }
-
     def _ensure(self, user_id):
         self.conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         self.conn.commit()
@@ -502,10 +504,21 @@ class DB:
         row = cur.fetchone()
         return row[0] if row else None
 
+    @staticmethod
+    def _default_user_dict():
+        return {
+            "username": None, "sc": 0, "lc": 0,
+            "wins": 0, "losses": 0, "games": 0,
+            "level": 0, "xp": 0, "layout": "classic", "title": "",
+            "streak": 0, "max_streak": 0, "total_bets": 0,
+            "total_won": 0, "total_lost": 0,
+            "overheat_score": 0, "last_spin_ts": 0,
+        }
+
     def get_balance(self, user_id, currency):
-        self._ensure(user_id)
         cur = self.conn.execute(f"SELECT {currency} FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return row[0] if row else 0
 
     def add_balance(self, user_id, currency, amount):
         self._ensure(user_id)
@@ -530,7 +543,6 @@ class DB:
         self.conn.commit()
 
     def get_user(self, user_id):
-        self._ensure(user_id)
         cur = self.conn.execute(
             "SELECT username, sc, lc, wins, losses, games, level, xp, layout, title, "
             "streak, max_streak, total_bets, total_won, total_lost, "
@@ -538,9 +550,12 @@ class DB:
             "FROM users WHERE user_id=?",
             (user_id,)
         )
+        row = cur.fetchone()
+        if row is None:
+            return self._default_user_dict()
         (username, sc, lc, wins, losses, games, level, xp, layout, title,
          streak, max_streak, total_bets, total_won, total_lost,
-         overheat_score, last_spin_ts) = cur.fetchone()
+         overheat_score, last_spin_ts) = row
         return {
             "username": username, "sc": sc, "lc": lc,
             "wins": wins, "losses": losses, "games": games,
@@ -556,9 +571,9 @@ class DB:
     # ================= УРОВНИ / XP =================
 
     def get_last_free_lc(self, user_id):
-        self._ensure(user_id)
         cur = self.conn.execute("SELECT last_free_lc FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return row[0] if row else 0
 
     def set_last_free_lc(self, user_id, timestamp):
         self._ensure(user_id)
@@ -566,9 +581,9 @@ class DB:
         self.conn.commit()
 
     def get_tickets(self, user_id) -> int:
-        self._ensure(user_id)
         cur = self.conn.execute("SELECT tickets FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return row[0] if row else 0
 
     def add_tickets(self, user_id, amount: int):
         """Добавляет билетики, не позволяя превысить лимит хранения."""
@@ -593,9 +608,8 @@ class DB:
         return cur.rowcount > 0
 
     def get_level_xp(self, user_id):
-        self._ensure(user_id)
         cur = self.conn.execute("SELECT level, xp FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()
+        return cur.fetchone() or (0, 0)
 
     def add_xp(self, user_id, amount):
         self._ensure(user_id)
@@ -623,9 +637,9 @@ class DB:
     # ================= НАСТРОЙКИ =================
 
     def get_layout(self, user_id):
-        self._ensure(user_id)
         cur = self.conn.execute("SELECT layout FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0] or "classic"
+        row = cur.fetchone()
+        return (row[0] if row else None) or "classic"
 
     def set_layout(self, user_id, layout):
         self._ensure(user_id)
@@ -633,9 +647,9 @@ class DB:
         self.conn.commit()
 
     def get_title(self, user_id):
-        self._ensure(user_id)
         cur = self.conn.execute("SELECT title FROM users WHERE user_id=?", (user_id,))
-        return cur.fetchone()[0] or ""
+        row = cur.fetchone()
+        return (row[0] if row else None) or ""
 
     def set_title(self, user_id, title):
         self._ensure(user_id)
@@ -870,7 +884,7 @@ class DB:
         now = int(time.time())
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
         next_refresh = cur.fetchone()[0]
-        purchasable_cosmetics = self._purchasable_cosmetic_ids()
+        purchasable_cosmetics = _purchasable_cosmetic_ids()
         if now >= next_refresh:
             cur = self.conn.execute("SELECT DISTINCT category FROM items")
             categories = [r[0] for r in cur.fetchall()]
@@ -1337,9 +1351,15 @@ class DB:
                 )
             equipped = cur.fetchone()
             if equipped:
+                slot_to_clear = equipped[0]
                 self.conn.execute(
                     "DELETE FROM user_badges WHERE user_id=? AND slot=?",
-                    (from_id, equipped[0])
+                    (from_id, slot_to_clear)
+                )
+                self.conn.execute(
+                    "DELETE FROM user_badge_slot_state "
+                    "WHERE user_id=? AND slot=? AND badge_id=?",
+                    (from_id, slot_to_clear, badge_id),
                 )
                 cur = self.conn.execute(
                     "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
@@ -1383,10 +1403,7 @@ class DB:
                         (from_id, shop_id)
                     )
 
-            self.conn.execute(
-                "DELETE FROM user_badge_slot_state WHERE user_id=? AND badge_id=?",
-                (from_id, badge_id),
-            )
+            # Inventory-only transfers have no equipped slot state to clear.
             self.conn.execute(
                 "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, 1) "
                 "ON CONFLICT(user_id, item_id) "

@@ -9,6 +9,7 @@ from aiogram.types import (
 )
 
 from admin import is_admin
+from utils import safe_answer
 
 
 STATUSES = {
@@ -43,13 +44,6 @@ def _truncate(text: str, max_len: int = 50) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len - 1] + "…"
-
-
-async def safe_answer(query, *args, **kwargs):
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
 
 
 class Complaints:

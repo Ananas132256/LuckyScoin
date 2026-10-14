@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from utils import safe_answer
 
 
 class BetStates(StatesGroup):
@@ -288,7 +289,7 @@ class Game:
     def _apply_overheat(self, symbols, stage, effects=None):
         """
         Применяет перегрев ПОСЛЕ выпадения символов.
-        Возвращает (новая_линия, сгорела_ли_вся, было_ли_возгорание).
+        Возвращает (новая_линия, сгорела_ли_вся, индексы_сгоревших_ячеек).
         """
         effects = effects or {}
         # fire_shield уменьшает шанс загорания (0.5 = -50% шанс)
@@ -300,16 +301,16 @@ class Game:
 
         # Шанс что вся линия сгорит
         if line_chance > 0 and random.random() < line_chance:
-            return ["🔥"] * 5, True, True
+            return ["🔥"] * 5, True, list(range(5))
 
         # Иначе — каждая ячейка независимо
         result = list(symbols)
-        burned = False
+        burned_indices = []
         for i in range(5):
             if random.random() < cell_chance:
                 result[i] = "🔥"
-                burned = True
-        return result, False, burned
+                burned_indices.append(i)
+        return result, False, burned_indices
 
     def _evaluate(self, symbols, effects=None):
         effects = effects or {}
@@ -427,12 +428,6 @@ class Game:
                 except TelegramBadRequest:
                     return
 
-    async def _safe_answer(self, query, *args, **kwargs):
-        try:
-            await query.answer(*args, **kwargs)
-        except Exception:
-            pass
-
     async def _render(self, message, name, bet, line_display, header, extra=""):
         text = (
             f"🎰 <b>{name} крутка</b>\n"
@@ -469,13 +464,27 @@ class Game:
                 f"<code>{columns_shown}/5</code>",
             )
 
-    async def _anim_spin(self, message, name, bet, cfg):
-        frames = min(cfg["spin_frames"], 2)
-        for i in range(frames):
-            rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            speed = "⏩⏩ ▶️" if i + 1 < frames else "⏩ ▶️ ▶️"
-            await self._render(message, name, bet, rnd,
-                               f"{cfg['label']} <i>Крутим...</i> {speed}")
+    def _spin_frame_display(self, final_symbols, frozen_count):
+        return " | ".join(
+            final_symbols[column]
+            if column < frozen_count
+            else random.choice(self.NOISE)
+            for column in range(5)
+        )
+
+    async def _anim_spin(self, message, name, bet, cfg, final_symbols):
+        frames = min(cfg["spin_frames"], 3)
+        frame_specs = (
+            (0, "▶️ <i>Крутим...</i> ⏩⏩⏩"),
+            (2, "▶️ <i>Крутим...</i> ⏩⏩"),
+            (4, "▶️ <i>Почти...</i> ⏩"),
+        )
+        for frozen_count, header in frame_specs[:frames]:
+            await self._render(
+                message, name, bet,
+                self._spin_frame_display(final_symbols, frozen_count),
+                header,
+            )
 
     async def _anim_reveal(self, message, name, bet, symbols, cfg, header):
         await self._render(
@@ -483,31 +492,7 @@ class Game:
             f"{cfg['label']} {header}",
         )
 
-    async def _anim_overheat(self, message, name, bet, symbols_before, symbols_after):
-        """Показывает возгорание и распространение огня без поджигания бомб."""
-        burned_idx = [
-            i for i in range(5)
-            if symbols_before[i] != symbols_after[i]
-        ]
-        if not burned_idx:
-            return
-
-        line = list(symbols_before)
-        for i in burned_idx:
-            line[i] = "🔥"
-        await self._render(
-            message, name, bet, " | ".join(line),
-            "🔥 <b>ВОЗГОРАНИЕ!</b>"
-        )
-        await asyncio.sleep(1.1)
-
-        spread_line, _, _ = self._apply_chain_explosion(line)
-        if spread_line != line:
-            await self._render(
-                message, name, bet, " | ".join(spread_line),
-                "🔥 <b>Огонь распространяется!</b>"
-            )
-            await asyncio.sleep(1.1)
+    # TODO: Re-enable heat-spread animation once chain reactions expose per-step frame data.
 
     def _apply_chain_explosion(self, symbols):
         line = list(symbols)
@@ -548,6 +533,41 @@ class Game:
         )
         await asyncio.sleep(1.05)
 
+    async def _anim_heat_ignite(
+        self, message, name, bet, symbols_before, burned_indices, stage,
+    ):
+        """Light up each burned cell one at a time."""
+        if not burned_indices:
+            return
+
+        burned_indices = sorted(burned_indices)
+        if len(burned_indices) <= 3:
+            beat_ends = burned_indices
+        elif len(burned_indices) == 4:
+            beat_ends = burned_indices[:2] + burned_indices[-1:]
+        else:
+            beat_ends = [
+                burned_indices[0],
+                burned_indices[2],
+                burned_indices[-1],
+            ]
+
+        for frame_index, last_burned in enumerate(beat_ends):
+            line = list(symbols_before)
+            visible_burns = {
+                index for index in burned_indices if index <= last_burned
+            }
+            for index in visible_burns:
+                line[index] = "🔥"
+            header = (
+                f"🔥 <b>Стадия {stage}/5</b>"
+                if frame_index == 0
+                else "🔥 <b>Горит!</b>"
+            )
+            await self._render(
+                message, name, bet, " | ".join(line), header
+            )
+
     async def _anim_reroll(self, message, name, bet, reroll_count, verdict, total):
         if verdict.get("reason") == "pattern":
             header = f"✨ <b>{verdict.get('pattern_name', 'ОСОБАЯ КОМБИНАЦИЯ')}!</b>\n<i>Перекрут...</i>"
@@ -558,11 +578,86 @@ class Game:
         await self._render(message, name, bet, rnd, header, extra)
         await asyncio.sleep(1.05)
 
-    async def _anim_win(self, message, name, bet, symbols, description):
+    async def _anim_unstable_reroll(
+        self, message, name, bet, symbols, sym, run, reroll_count,
+        accumulated_mult,
+    ):
+        """Show the unstable symbol glowing, then bursting into a reroll spark."""
+        label = sym if sym is not None else "Паттерн"
+        extra = (
+            f"{label} × {run}  •  реролл #{reroll_count}"
+            f"  •  копилка x{accumulated_mult:g}"
+        )
+        glowing_line = [
+            f"✨{symbol}✨" if sym is not None and symbol == sym else symbol
+            for symbol in symbols
+        ]
+        burst_line = [random.choice(self.NOISE) for _ in range(5)]
+        burst_line[random.randrange(5)] = "⚡"
+
+        await self._render(
+            message, name, bet, " | ".join(glowing_line),
+            "⚡ <b>НЕСТАБИЛЬНО!</b>", extra,
+        )
+        await self._render(
+            message, name, bet, " | ".join(burst_line),
+            "🌀 <b>Перекрут...</b>", extra,
+        )
+
+    def _highlight_cells(self, symbols, sym, run, wrap_open="「", wrap_close="」"):
+        if sym is None or run == 0:
+            return list(symbols)
+        return [
+            f"{wrap_open}{symbol}{wrap_close}" if symbol == sym else symbol
+            for symbol in symbols
+        ]
+
+    async def _anim_win_by_size(self, message, name, bet, symbols,
+                                mult, sym, run):
+        """Choose celebration intensity by multiplier size."""
         line = " | ".join(symbols)
-        await self._render(message, name, bet, line,
-                           f"🎉 <b>ВЫИГРЫШ!</b> ✨ 🎉 ✨\n<i>{description}</i>")
-        await asyncio.sleep(1.05)
+        frames = []
+
+        if mult >= 100:
+            highlighted = self._highlight_cells(symbols, sym, run)
+            sparkling = [
+                ("✨" if index % 2 == 0 else "💫")
+                if sym is not None and run != 0 and symbol == sym
+                else symbol
+                for index, symbol in enumerate(symbols)
+            ]
+            frames = [
+                (line, "🎰🤑🎰 <b>БАРАБАНЫ РАСКАЛЕНЫ!</b>"),
+                (
+                    " | ".join(highlighted),
+                    f"✨ <b>{sym} × {run}!!!</b> ✨",
+                ),
+                (" | ".join(sparkling), "🎆 <b>ДЖЕКПОТ!</b> 🎆"),
+                (line, f"🏆 <b>x{mult:g} ОТ СТАВКИ!</b>"),
+            ]
+        elif mult >= 20:
+            money_line = [
+                "💰" if sym is not None and run != 0 and symbol == sym else symbol
+                for symbol in symbols
+            ]
+            frames = [
+                (line, "🎉 <b>Крупный выигрыш!</b>"),
+                (
+                    " | ".join(money_line),
+                    f"💸 <b>{sym} × {run}</b> — x{mult:g}",
+                ),
+                (line, "✅ <b>+ деньги в карман!</b>"),
+            ]
+        elif mult >= 5:
+            frames = [
+                (line, f"✨ <b>{sym} × {run}</b>"),
+                (line, f"🎉 <b>x{mult:g}</b>"),
+            ]
+        else:
+            frames = [(line, f"🙂 <b>{sym} × {run}</b> — +мелочь")]
+
+        for frame_line, header in frames:
+            await self._render(message, name, bet, frame_line, header)
 
     async def _anim_bomb(self, message, name, bet, symbols, description):
         line = " | ".join(symbols)
@@ -571,6 +666,52 @@ class Game:
             f"💣 <b>ВЗРЫВ!</b> 🧨\n<i>{description}</i>"
         )
         await asyncio.sleep(1.05)
+
+    async def _anim_bomb_explosion(
+        self, message, name, bet, symbols_before, symbols_after,
+        damage_amount, run_count,
+    ):
+        """Cinematic bomb detonation in 4 frames."""
+        blast_indices = [
+            index for index, symbol in enumerate(symbols_after)
+            if symbol == "💥"
+        ]
+        blast_line = list(symbols_after)
+        for index in blast_indices:
+            blast_line[index] = "💥" if index % 2 == 0 else "🧨"
+
+        ash_line = list(symbols_after)
+        for index in blast_indices:
+            ash_line[index] = "🖤"
+
+        damage_percent = abs(damage_amount) * 100
+        frames = (
+            (
+                symbols_before,
+                "🧨 <b>Фитиль шипит...</b>",
+                f"💣×{run_count}  •  <i>тик-так...</i>",
+            ),
+            (
+                symbols_before,
+                "🕯 <b>ПОСЛЕДНЯЯ СЕКУНДА!</b>",
+                f"💣×{run_count}  •  <b>3… 2… 1…</b>",
+            ),
+            (
+                blast_line,
+                "💥💥💥 <b>БУМ!!!</b> 💥💥💥",
+                "<i>Стол подпрыгнул, фишки летят!</i>",
+            ),
+            (
+                ash_line,
+                "🖤 <b>Дым рассеивается...</b>",
+                f"💣 {run_count} бомб сдетонировали"
+                f" (−{damage_percent:g}% от ставки)",
+            ),
+        )
+        for symbols, header, extra in frames:
+            await self._render(
+                message, name, bet, " | ".join(symbols), header, extra
+            )
 
     async def _anim_loss(self, message, name, bet, symbols):
         line = " | ".join(symbols)
@@ -592,7 +733,6 @@ class Game:
                 continue
             break
 
-        effects["_advanced_result"] = verdict
         return (
             verdict["total_mult"],
             verdict["is_item"],
@@ -601,6 +741,7 @@ class Game:
             effects,
             "🔥" in grid[1],
             0,
+            verdict,
         )
 
     async def _resolve(self, message, name, bet, spin_key, user_id):
@@ -626,35 +767,96 @@ class Game:
         total_explosions = 0
 
         while True:
-            await self._anim_spin(message, name, bet, cfg)
             symbols = self._spin(reroll_count, effects)
+            await self._anim_spin(message, name, bet, cfg, symbols)
 
-            # Применяем перегрев
             symbols_before = list(symbols)
-            symbols, _, burned = self._apply_overheat(symbols, stage, effects)
-            if burned:
+            await self._render(
+                message, name, bet, " | ".join(symbols_before),
+                f"{cfg['label']} <b>Стоп!</b>",
+            )
+            # Применяем перегрев
+            symbols, _, burned_indices = self._apply_overheat(
+                symbols, stage, effects
+            )
+            if burned_indices:
                 any_burn = True
+                await self._anim_heat_ignite(
+                    message, name, bet, symbols_before, burned_indices, stage
+                )
 
-            symbols, explosions, _ = self._apply_chain_explosion(symbols)
+            symbols, explosions, chain_order = self._apply_chain_explosion(
+                symbols
+            )
             total_explosions += explosions
+            if chain_order:
+                await self._anim_explosion(
+                    message, name, bet, symbols, chain_order
+                )
 
             verdict = self._evaluate(symbols, effects)
             final_symbols = symbols
             if verdict["action"] == "reroll":
-                header = f"🔄 <b>Перекрут #{reroll_count + 1}</b>"
+                await self._anim_reveal(
+                    message, name, bet, symbols, cfg,
+                    f"🔄 <b>Перекрут #{reroll_count + 1}</b>",
+                )
+                total_mult += verdict["mult"]
+                is_item_any = is_item_any or verdict["item"]
+                reroll_sym = verdict.get("sym")
+                if verdict.get("reason") == "pattern":
+                    reroll_sym = verdict.get("pattern_name", "Паттерн")
+                await self._anim_unstable_reroll(
+                    message, name, bet, symbols,
+                    reroll_sym, verdict["run"], reroll_count + 1, total_mult,
+                )
+                reroll_count += 1
+                if reroll_count > self.MAX_REROLLS:
+                    break
+                continue
             elif explosions:
                 header = f"💥 <b>Цепная реакция: {explosions}!</b>"
             elif verdict["action"] == "win" and verdict["mult"] < 0:
                 header = "💣 <b>ВЗРЫВ!</b>"
             elif verdict["action"] == "win":
                 header = "🎉 <b>ВЫИГРЫШ!</b>"
-            elif burned:
+            elif burned_indices:
                 header = "🔥 <b>Перегрев!</b>"
             else:
                 header = "😔 <i>Ничего не выпало...</i>"
-            await self._anim_reveal(
-                message, name, bet, symbols, cfg, header
-            )
+            if verdict["action"] == "win" and verdict["mult"] < 0:
+                run_count = verdict["run"]
+                symbols_after = list(symbols)
+                for start in range(len(symbols) - run_count + 1):
+                    if all(
+                        symbol == "💣"
+                        for symbol in symbols[start:start + run_count]
+                    ):
+                        for index in range(start, start + run_count):
+                            symbols_after[index] = "💥"
+                        break
+                await self._anim_bomb_explosion(
+                    message, name, bet, symbols, symbols_after,
+                    verdict["mult"], run_count,
+                )
+                await self._anim_reveal(
+                    message, name, bet, symbols, cfg, header
+                )
+            elif verdict["action"] == "win":
+                win_sym = verdict.get("sym")
+                win_run = verdict["run"]
+                if verdict.get("reason") == "pattern":
+                    win_sym = verdict.get("pattern_name", "Паттерн")
+                    win_run = 0
+                if verdict["mult"] > 0:
+                    await self._anim_win_by_size(
+                        message, name, bet, symbols,
+                        verdict["mult"], win_sym, win_run,
+                    )
+            else:
+                await self._anim_reveal(
+                    message, name, bet, symbols, cfg, header
+                )
 
             if verdict["action"] == "win":
                 total_mult += verdict["mult"]
@@ -664,17 +866,13 @@ class Game:
                 else:
                     final_description = f"{verdict['sym']} × {verdict['run']}"
                 break
-            if verdict["action"] == "reroll":
-                total_mult += verdict["mult"]
-                is_item_any = is_item_any or verdict["item"]
-                reroll_count += 1
-                if reroll_count > self.MAX_REROLLS:
-                    break
-                continue
             total_mult = 0
             is_item_any = False
             break
-        return total_mult, is_item_any, final_symbols, reroll_count, effects, any_burn, total_explosions
+        return (
+            total_mult, is_item_any, final_symbols, reroll_count, effects,
+            any_burn, total_explosions, None,
+        )
 
     # ---------- ЗАПУСК ----------
 
@@ -692,17 +890,15 @@ class Game:
 
         self.brain.db.increment_badge_rolls(user_id)
 
-        total_mult, is_item, symbols, rerolls, effects, any_burn, explosions = await self._resolve(
-            msg, name, bet, spin_key, user_id
-        )
+        (
+            total_mult, is_item, symbols, rerolls, effects, any_burn,
+            explosions, advanced_result,
+        ) = await self._resolve(msg, name, bet, spin_key, user_id)
 
         mult_bonus = effects.get("mult_bonus", 0)
         effective_mult = total_mult * (1 + mult_bonus) if total_mult > 0 else total_mult
 
         # Штраф за 🔥
-        advanced_result = (
-            effects.get("_advanced_result") if spin_key == "advanced" else None
-        )
         fire_count = (
             sum(line.count("🔥") for line in symbols)
             if spin_key == "advanced" else symbols.count("🔥")
@@ -950,24 +1146,24 @@ class Game:
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                 parse_mode="HTML",
             )
-            await self._safe_answer(query)
+            await safe_answer(query)
         except Exception as error:
             print(f"⚠️ Ошибка игрового меню: {error}")
-            await self._safe_answer(query, "Не удалось открыть игровое меню.", show_alert=True)
+            await safe_answer(query, "Не удалось открыть игровое меню.", show_alert=True)
 
     async def cb_locked(self, query: CallbackQuery):
         try:
-            await self._safe_answer(query, "🔒 Недостаточный уровень!", show_alert=True)
+            await safe_answer(query, "🔒 Недостаточный уровень!", show_alert=True)
         except Exception as error:
             print(f"⚠️ Ошибка заблокированной крутки: {error}")
 
     async def _ask_bet(self, query, spin_key, state):
         if spin_key not in self.SPIN_TYPES:
-            return await self._safe_answer(query, "Неизвестный тип!", show_alert=True)
+            return await safe_answer(query, "Неизвестный тип!", show_alert=True)
         user_id = query.from_user.id
         level, _ = self.brain.db.get_level_xp(user_id)
         if level < self.LEVEL_REQ.get(spin_key, 0):
-            return await self._safe_answer(
+            return await safe_answer(
                 query, f"Нужен уровень {self.LEVEL_REQ[spin_key]}!",
                 show_alert=True,
             )
@@ -988,29 +1184,29 @@ class Game:
             query.message, text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
             parse_mode="HTML")
-        await self._safe_answer(query)
+        await safe_answer(query)
 
     async def cb_choose_type(self, query: CallbackQuery, state: FSMContext):
         try:
             await self._ask_bet(query, query.data.split("_", 1)[1], state)
         except Exception as error:
             print(f"⚠️ Ошибка выбора типа крутки: {error}")
-            await self._safe_answer(query, "Не удалось выбрать крутку.", show_alert=True)
+            await safe_answer(query, "Не удалось выбрать крутку.", show_alert=True)
 
     async def cb_spin_again(self, query: CallbackQuery, state: FSMContext):
         try:
             await self._ask_bet(query, query.data.split("_", 1)[1], state)
         except Exception as error:
             print(f"⚠️ Ошибка повторного выбора крутки: {error}")
-            await self._safe_answer(query, "Не удалось повторить крутку.", show_alert=True)
+            await safe_answer(query, "Не удалось повторить крутку.", show_alert=True)
 
     async def cb_advanced_patterns(self, query: CallbackQuery):
         try:
             # Позже здесь появится настройка собственных паттернов.
-            await self._safe_answer(query, "📐 Свои паттерны — скоро!", show_alert=True)
+            await safe_answer(query, "📐 Свои паттерны — скоро!", show_alert=True)
         except Exception as error:
             print(f"⚠️ Ошибка заглушки паттернов: {error}")
-            await self._safe_answer(query, "Не удалось открыть паттерны.", show_alert=True)
+            await safe_answer(query, "Не удалось открыть паттерны.", show_alert=True)
 
     async def cb_cancel_bet(self, query: CallbackQuery, state: FSMContext):
         await state.clear()
@@ -1093,10 +1289,10 @@ class Game:
                 reply_markup=self._roulette_keyboard(),
                 parse_mode="HTML",
             )
-            await self._safe_answer(query)
+            await safe_answer(query)
         except Exception as error:
             print(f"⚠️ Ошибка открытия рулетки: {error}")
-            await self._safe_answer(query, "Не удалось открыть рулетку.", show_alert=True)
+            await safe_answer(query, "Не удалось открыть рулетку.", show_alert=True)
 
     async def roulette_buy(self, query: CallbackQuery, state: FSMContext):
         try:
@@ -1104,11 +1300,11 @@ class Game:
             user_id = query.from_user.id
             tickets = self.brain.db.get_tickets(user_id)
             if tickets >= self.MAX_TICKETS:
-                await self._safe_answer(query, "🎟 Максимум билетиков.", show_alert=True)
+                await safe_answer(query, "🎟 Максимум билетиков.", show_alert=True)
                 return
             balance = self.brain.db.get_balance(user_id, "sc")
             if balance < self.ROULETTE_TICKET_PRICE_SC:
-                await self._safe_answer(
+                await safe_answer(
                     query, "Недостаточно SC. Нужно 5 SC.", show_alert=True
                 )
                 return
@@ -1127,17 +1323,17 @@ class Game:
                 reply_markup=self._roulette_keyboard(),
                 parse_mode="HTML",
             )
-            await self._safe_answer(query, "✅ Билет куплен!")
+            await safe_answer(query, "✅ Билет куплен!")
         except Exception as error:
             print(f"⚠️ Ошибка покупки билетика: {error}")
-            await self._safe_answer(query, "Не удалось купить билет.", show_alert=True)
+            await safe_answer(query, "Не удалось купить билет.", show_alert=True)
 
     async def roulette_spin(self, query: CallbackQuery, state: FSMContext):
         try:
             await state.clear()
             user_id = query.from_user.id
             if not self.brain.db.spend_ticket(user_id):
-                await self._safe_answer(query, "Нет билетиков для крутки.", show_alert=True)
+                await safe_answer(query, "Нет билетиков для крутки.", show_alert=True)
                 return
             prize = self._pick_roulette_result()
             medal_won = (
@@ -1145,18 +1341,24 @@ class Game:
                 and random.random() < prize["medal_chance"]
             )
             symbols = [entry["symbol"] for entry in self.ROULETTE_PRIZES]
-            slots = [random.choice(symbols) for _ in range(4)] + [prize["symbol"]]
-            await self._safe_answer(query)
+            win_position = random.randint(0, 4)
+            slots = [random.choice(symbols) for _ in range(5)]
+            slots[win_position] = prize["symbol"]
+            await safe_answer(query)
             await self._anim_roulette(
-                query.message, user_id, prize, slots, medal_won
+                query.message, user_id, prize, slots, medal_won, win_position
             )
         except Exception as error:
             print(f"⚠️ Ошибка крутки рулетки: {error}")
-            await self._safe_answer(query, "Не удалось выполнить крутку.", show_alert=True)
+            await safe_answer(query, "Не удалось выполнить крутку.", show_alert=True)
 
-    async def _anim_roulette(self, message, user_id, prize, slots, medal_won):
+    async def _anim_roulette(
+        self, message, user_id, prize, slots, medal_won, win_position
+    ):
         """Показывает не более пяти кадров, с паузой 1,1 секунды."""
-        for frame, position in enumerate((0, 1, 2, 3, 4)):
+        total_frames = len(slots)
+        for frame in range(total_frames):
+            position = min(frame, win_position)
             if frame:
                 await asyncio.sleep(1.1)
             arrow = "   ".join(
@@ -1170,7 +1372,7 @@ class Game:
                 f"<i>Крутим... {frame + 1}/5</i>"
             )
 
-            if frame == 4:
+            if frame == total_frames - 1:
                 self.brain.db.add_balance(
                     user_id, prize["currency"], prize["amount"]
                 )

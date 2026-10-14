@@ -1,6 +1,7 @@
 import time
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from utils import safe_answer
 
 SHOP_ENABLED = True
 
@@ -25,13 +26,6 @@ def _format_time_left(seconds):
     if h > 0:
         return f"{h}ч {m}м"
     return f"{m}м"
-
-
-async def safe_answer(query, *args, **kwargs):
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
 
 
 class Shop:

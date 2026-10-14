@@ -3,6 +3,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from db import DB
+from utils import safe_answer
 
 
 class TycoonStates(StatesGroup):
@@ -12,14 +13,6 @@ class TycoonStates(StatesGroup):
 MAX_HOURS = DB.CASINO_MAX_HOURS
 ROOMS = DB.ROOMS
 STAFF = DB.STAFF
-
-
-async def safe_answer(query, *args, **kwargs):
-    """Безопасный ответ на callback — глушит 'query too old'."""
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
 
 
 def fmt(seconds):

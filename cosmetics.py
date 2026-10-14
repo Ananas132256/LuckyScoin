@@ -324,14 +324,12 @@ RARITY_EMOJI = {
 }
 
 
+# Slot i unlocks at SLOT_UNLOCK_LEVELS[i].
+SLOT_UNLOCK_LEVELS = (5, 5, 5, 25, 100)
+
+
 def badge_slots_for_level(level: int) -> int:
-    if level < 5:
-        return 0
-    if level < 25:
-        return 3
-    if level < 100:
-        return 4
-    return 5
+    return sum(1 for req in SLOT_UNLOCK_LEVELS if level >= req)
 
 
 def is_unlocked(item: dict, u: dict, room_level: int = 0) -> bool:

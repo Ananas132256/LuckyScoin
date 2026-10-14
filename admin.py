@@ -480,7 +480,9 @@ class Admin:
                 free_slot = i
                 break
 
-        if free_slot is not None:
+        if unlocked_slots == 0:
+            result = "добавлена в инвентарь (слоты откроются с 5 ур.)"
+        elif free_slot is not None:
             self.brain.db.set_user_badge(target_id, free_slot, badge_id)
             result = f"и надета в слот <b>{free_slot + 1}</b>"
         else:

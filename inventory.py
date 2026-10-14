@@ -5,20 +5,14 @@ from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from cosmetics import (
-    BADGES, TITLES, RARITY_EMOJI, CRAFT_CHANCES,
+    BADGES, TITLES, RARITY_EMOJI, CRAFT_CHANCES, SLOT_UNLOCK_LEVELS,
     badge_slots_for_level, get_next_rarity, is_unlocked, describe_effect_dict,
 )
+from utils import safe_answer
 
 # Включает/выключает отображение кнопки "⚒ Крафт" в инвентаре.
 # True — крафт доступен, False — кнопка скрыта.
 CRAFT_ENABLED = False
-
-
-async def safe_answer(query, *args, **kwargs):
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
 
 
 class Inventory:
@@ -505,7 +499,7 @@ class Inventory:
             else:
                 lines.append(f"{slot + 1}. <i>пусто</i>")
 
-        unlock_lvl = [5, 5, 5, 25, 100]
+        unlock_lvl = SLOT_UNLOCK_LEVELS
         buttons = []
         for slot in range(5):
             if slot >= total:

@@ -1,6 +1,7 @@
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from utils import safe_answer
 import time
 
 
@@ -71,13 +72,6 @@ LAYOUTS = {
         ],
     },
 }
-
-
-async def safe_answer(query, *args, **kwargs):
-    try:
-        await query.answer(*args, **kwargs)
-    except Exception:
-        pass
 
 
 def _fmt_duration(seconds: int) -> str:
