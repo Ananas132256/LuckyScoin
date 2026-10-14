@@ -444,8 +444,8 @@ class Game:
         await self._safe_edit(message, text, parse_mode="HTML")
 
     async def _anim_reveal_grid(self, message, name, bet, grid, cfg):
-        """Открывает сетку по одному столбцу за каждый кадр."""
-        for columns_shown in range(6):
+        """Плавно останавливает сетку в двух коротких кадрах."""
+        for columns_shown in (2, 5):
             rows = []
             for line in grid:
                 shown = line[:columns_shown]
@@ -456,40 +456,20 @@ class Game:
                 f"{cfg['label']} <b>Стоп!</b> "
                 f"<code>{columns_shown}/5</code>",
             )
-            delay = (
-                cfg["last_stop_delay"]
-                if columns_shown == 5 else cfg["stop_delay"]
-            )
-            await asyncio.sleep(delay)
 
     async def _anim_spin(self, message, name, bet, cfg):
-        frames = cfg["spin_frames"]
-        base_delay = cfg["spin_delay"]
+        frames = min(cfg["spin_frames"], 2)
         for i in range(frames):
             rnd = " | ".join(random.choice(self.NOISE) for _ in range(5))
-            speed = "⏩ ⏩ ▶️" if i + 1 < frames else "⏩ ▶️ ▶️"
+            speed = "⏩⏩ ▶️" if i + 1 < frames else "⏩ ▶️ ▶️"
             await self._render(message, name, bet, rnd,
                                f"{cfg['label']} <i>Крутим...</i> {speed}")
-            await asyncio.sleep(base_delay)
 
-    async def _anim_reveal(self, message, name, bet, symbols, cfg):
+    async def _anim_reveal(self, message, name, bet, symbols, cfg, header):
         await self._render(
-            message, name, bet, " | ".join(["🌫️"] * 5),
-            f"{cfg['label']} <i>Открываем...</i> <code>0/5</code>"
+            message, name, bet, " | ".join(symbols),
+            f"{cfg['label']} {header}",
         )
-        await asyncio.sleep(1.1)
-
-        for shown_count in range(1, 6):
-            display = " | ".join(
-                symbols[:shown_count] + ["🌫️"] * (5 - shown_count)
-            )
-            sound = "💥" if shown_count == 5 else "🔔"
-            await self._render(
-                message, name, bet, display,
-                f"{cfg['label']} <b>Стоп!</b> "
-                f"{sound} <code>{shown_count}/5</code>"
-            )
-            await asyncio.sleep(1.1)
 
     async def _anim_overheat(self, message, name, bet, symbols_before, symbols_after):
         """Показывает возгорание и взрывы клеток рядом с бомбами."""
@@ -658,27 +638,30 @@ class Game:
 
             # Применяем перегрев
             symbols_before = list(symbols)
-            symbols, burned_all, burned = self._apply_overheat(symbols, stage, effects)
+            symbols, _, burned = self._apply_overheat(symbols, stage, effects)
             if burned:
                 any_burn = True
 
-            # Reveal — показываем символы БЕЗ огня сначала
-            await self._anim_reveal(message, name, bet, symbols_before, cfg)
-
-            # Если что-то загорелось — анимация огня
-            if burned:
-                await self._anim_overheat(message, name, bet, symbols_before, symbols)
-
-            symbols_before_chain = list(symbols)
-            symbols, explosions, chain_order = self._apply_chain_explosion(symbols)
+            symbols, explosions, _ = self._apply_chain_explosion(symbols)
             total_explosions += explosions
-            if explosions > 0:
-                await self._anim_explosion(
-                    message, name, bet, symbols, chain_order
-                )
 
             verdict = self._evaluate(symbols, effects)
             final_symbols = symbols
+            if verdict["action"] == "reroll":
+                header = f"🔄 <b>Перекрут #{reroll_count + 1}</b>"
+            elif explosions:
+                header = f"💥 <b>Цепная реакция: {explosions}!</b>"
+            elif verdict["action"] == "win" and verdict["mult"] < 0:
+                header = "💣 <b>ВЗРЫВ!</b>"
+            elif verdict["action"] == "win":
+                header = "🎉 <b>ВЫИГРЫШ!</b>"
+            elif burned:
+                header = "🔥 <b>Перегрев!</b>"
+            else:
+                header = "😔 <i>Ничего не выпало...</i>"
+            await self._anim_reveal(
+                message, name, bet, symbols, cfg, header
+            )
 
             if verdict["action"] == "win":
                 total_mult += verdict["mult"]
@@ -687,10 +670,6 @@ class Game:
                     final_description = f"Паттерн «{verdict.get('pattern_name', '?')}»"
                 else:
                     final_description = f"{verdict['sym']} × {verdict['run']}"
-                if verdict["mult"] < 0:
-                    await self._anim_bomb(message, name, bet, symbols, final_description)
-                else:
-                    await self._anim_win(message, name, bet, symbols, final_description)
                 break
             if verdict["action"] == "reroll":
                 total_mult += verdict["mult"]
@@ -698,12 +677,9 @@ class Game:
                 reroll_count += 1
                 if reroll_count > self.MAX_REROLLS:
                     break
-                await self._anim_reroll(message, name, bet, reroll_count,
-                                        verdict, total_mult)
                 continue
             total_mult = 0
             is_item_any = False
-            await self._anim_loss(message, name, bet, symbols)
             break
         return total_mult, is_item_any, final_symbols, reroll_count, effects, any_burn, total_explosions
 
