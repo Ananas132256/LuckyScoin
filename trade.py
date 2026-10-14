@@ -392,6 +392,17 @@ class Trade:
                 conn.rollback()
                 db.log_admin(0, "trade_error", f"{trade_id}: {error}")
                 print(f"Ошибка при передаче трейда #{trade_id}: {error}")
+                try:
+                    await self.brain.bot.send_message(
+                        from_id,
+                        f"⚠️ Трейд #{trade_id} не выполнен из-за ошибки. "
+                        "Предложение осталось активным.",
+                    )
+                except Exception as notify_error:
+                    print(
+                        f"Ошибка уведомления об отмене трейда "
+                        f"#{trade_id}: {notify_error}"
+                    )
                 return await safe_answer(
                     query,
                     "⚠️ Ошибка при выполнении трейда. Обратитесь к админам.",
