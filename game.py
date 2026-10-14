@@ -195,10 +195,12 @@ class Game:
 
         equipped = self.brain.db.get_user_badges(user_id)
         owned_ids = {bid for bid in equipped.values() if bid}
+        # Hidden badges are reserved for specific game events, not random drops.
         badge_weights = [
             (badge_id, self.ITEM_RARITY_WEIGHTS[badge.get("rarity")])
             for badge_id, badge in BADGES.items()
             if badge.get("rarity") in self.ITEM_RARITY_WEIGHTS
+            and not badge.get("hidden")
             and badge_id not in owned_ids
             and is_unlocked(badge, user, room_level)
         ]
@@ -482,21 +484,13 @@ class Game:
         )
 
     async def _anim_overheat(self, message, name, bet, symbols_before, symbols_after):
-        """Показывает возгорание и взрывы клеток рядом с бомбами."""
+        """Показывает возгорание и распространение огня без поджигания бомб."""
         burned_idx = [
             i for i in range(5)
             if symbols_before[i] != symbols_after[i]
         ]
         if not burned_idx:
             return
-
-        exploded_idx = []
-        for i in burned_idx:
-            if any(
-                0 <= neighbor < 5 and symbols_before[neighbor] == "💣"
-                for neighbor in (i - 1, i + 1)
-            ):
-                exploded_idx.append(i)
 
         line = list(symbols_before)
         for i in burned_idx:
@@ -507,20 +501,11 @@ class Game:
         )
         await asyncio.sleep(1.1)
 
-        if exploded_idx:
-            for i in exploded_idx:
-                line[i] = "💥"
-                await self._render(
-                    message, name, bet, " | ".join(line),
-                    "💥 <b>ВЗРЫВ!</b> <i>Огонь рядом с бомбой...</i>"
-                )
-                await asyncio.sleep(1.1)
-
-            for i in exploded_idx:
-                line[i] = "🔥"
+        spread_line, _, _ = self._apply_chain_explosion(line)
+        if spread_line != line:
             await self._render(
-                message, name, bet, " | ".join(line),
-                "🔥 <b>Всё горит!</b>"
+                message, name, bet, " | ".join(spread_line),
+                "🔥 <b>Огонь распространяется!</b>"
             )
             await asyncio.sleep(1.1)
 
@@ -528,30 +513,28 @@ class Game:
         line = list(symbols)
         explosions = 0
         chain_order = []
+        frontier = [i for i, symbol in enumerate(line) if symbol == "🔥"]
         step = 0
 
-        while True:
-            # Сначала фиксируем весь шаг, чтобы взрывы срабатывали одновременно.
-            detonating = [
-                i for i, symbol in enumerate(line)
-                if symbol == "💣"
-                and (
-                    (i > 0 and line[i - 1] == "🔥")
-                    or (i + 1 < len(line) and line[i + 1] == "🔥")
-                )
-            ]
-            if not detonating:
+        while frontier:
+            newly_burning = set()
+            for i in frontier:
+                for neighbor in (i - 1, i + 1):
+                    if (
+                        0 <= neighbor < len(line)
+                        and line[neighbor] not in ("🔥", "💣")
+                    ):
+                        newly_burning.add(neighbor)
+            if not newly_burning:
                 break
 
+            # Fire spreads through ordinary cells; bombs stay intact for _evaluate.
             step += 1
-            chain_order.append((step, detonating))
-            explosions += len(detonating)
-            for i in detonating:
+            chain_order.append((step, sorted(newly_burning)))
+            explosions += len(newly_burning)
+            for i in newly_burning:
                 line[i] = "🔥"
-                if i > 0:
-                    line[i - 1] = "🔥"
-                if i + 1 < len(line):
-                    line[i + 1] = "🔥"
+            frontier = list(newly_burning)
 
         return line, explosions, chain_order
 

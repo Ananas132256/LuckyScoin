@@ -262,6 +262,8 @@ class Admin:
             return await message.answer("❌ Пример: /give @vasya sc 100")
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        if amount < 0:
+            return await message.answer("❌ Используй /take для списания.")
 
         self.brain.db.add_balance(target_id, currency, amount)
         new_bal = self.brain.db.get_balance(target_id, currency)
@@ -288,6 +290,14 @@ class Admin:
             return await message.answer("❌ Пример: /take @vasya lc 50")
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        if amount < 0:
+            return await message.answer("❌ Сумма не может быть отрицательной.")
+        current = self.brain.db.get_balance(target_id, currency)
+        if amount > current:
+            return await message.answer(
+                f"❌ У юзера только {current} {currency.upper()}. "
+                f"Забрать {amount} нельзя."
+            )
 
         self.brain.db.add_balance(target_id, currency, -amount)
         new_bal = self.brain.db.get_balance(target_id, currency)
@@ -314,6 +324,8 @@ class Admin:
             return await message.answer("❌ Неверные аргументы.")
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        if amount < 0:
+            return await message.answer("❌ Баланс не может быть отрицательным.")
 
         self.brain.db.set_balance(target_id, currency, amount)
         await message.answer(
