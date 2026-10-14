@@ -151,6 +151,8 @@ class Game:
 
     def __init__(self, brain):
         self.brain = brain
+        self._last_edit = 0
+        self._edit_lock = asyncio.Lock()
 
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "play")(self.cb_play)
@@ -202,16 +204,18 @@ class Game:
 
             badge_id = self._pick_random_badge(user_id)
             if badge_id is None:
+                # Защита на будущее: если значков станет меньше, чем слотов.
                 amount = self.NO_SLOT_COMPENSATION_LC
                 self.brain.db.add_balance(user_id, "lc", amount)
                 return f"🎁 Все значки уже собраны! Начислено <b>{amount} LC</b>."
 
             badge = BADGES.get(badge_id)
-            if not badge or not badge.get("shop_id"):
+            shop_id = badge.get("shop_id") if badge else None
+            if not shop_id:
                 return None
 
-            # Сначала сохраняем медаль в инвентаре, затем пробуем надеть.
-            self.brain.db.add_item(user_id, badge["shop_id"], 1)
+            # Сначала сохраняем медаль в инвентаре, чтобы она не потерялась.
+            self.brain.db.add_item(user_id, shop_id, 1)
 
             level = self.brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
@@ -220,12 +224,12 @@ class Game:
                 (i for i in range(max_slots) if not equipped.get(i)),
                 None,
             )
-            if slot is None:
-                return f"🎁 Выпал значок: <b>{badge['name']}</b>, он добавлен в инвентарь."
-
-            self.brain.db.set_user_badge(user_id, slot, badge_id)
             name = badge["name"]
-            return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
+            if slot is not None:
+                self.brain.db.set_user_badge(user_id, slot, badge_id)
+                return f"🎁 Выпал значок: <b>{name}</b> (слот {slot + 1})"
+
+            return f"🎁 Выпал значок: <b>{name}</b>, добавлен в инвентарь."
         except Exception as error:
             print(f"⚠️ Ошибка выдачи медали: {error}")
             return None
@@ -396,16 +400,20 @@ class Game:
     # ---------- ОТРИСОВКА ----------
 
     async def _safe_edit(self, message, text, **kwargs):
-        try:
-            await message.edit_text(text, **kwargs)
-        except TelegramRetryAfter as error:
-            await asyncio.sleep(error.retry_after + 1)
-            try:
-                await message.edit_text(text, **kwargs)
-            except TelegramBadRequest:
-                pass
-        except TelegramBadRequest:
-            pass
+        async with self._edit_lock:
+            while True:
+                elapsed = time.time() - self._last_edit
+                if elapsed < 1.1:
+                    await asyncio.sleep(1.1 - elapsed)
+                self._last_edit = time.time()
+                try:
+                    await message.edit_text(text, **kwargs)
+                    return
+                except TelegramRetryAfter as error:
+                    elapsed = time.time() - self._last_edit
+                    await asyncio.sleep(max(error.retry_after + 1, 1.1 - elapsed))
+                except TelegramBadRequest:
+                    return
 
     async def _safe_answer(self, query, *args, **kwargs):
         try:
@@ -465,32 +473,66 @@ class Game:
             await asyncio.sleep(base_delay)
 
     async def _anim_reveal(self, message, name, bet, symbols, cfg):
-        for shown_count in (3, 5):
-            display = " | ".join(symbols[:shown_count] + ["🌫️"] * (5 - shown_count))
+        await self._render(
+            message, name, bet, " | ".join(["🌫️"] * 5),
+            f"{cfg['label']} <i>Открываем...</i> <code>0/5</code>"
+        )
+        await asyncio.sleep(1.1)
+
+        for shown_count in range(1, 6):
+            display = " | ".join(
+                symbols[:shown_count] + ["🌫️"] * (5 - shown_count)
+            )
             sound = "💥" if shown_count == 5 else "🔔"
             await self._render(
                 message, name, bet, display,
-                f"{cfg['label']} <b>Стоп!</b> {sound} <code>{shown_count}/5</code>"
+                f"{cfg['label']} <b>Стоп!</b> "
+                f"{sound} <code>{shown_count}/5</code>"
             )
-            if shown_count == 5:
-                await asyncio.sleep(cfg["last_stop_delay"])
-            else:
-                await asyncio.sleep(cfg["stop_delay"])
+            await asyncio.sleep(1.1)
 
-    async def _anim_overheat(self, message, name, bet, old_symbols, new_symbols):
-        """Анимация возгорания ячеек после reveal."""
-        burned_idx = [i for i in range(5) if old_symbols[i] != new_symbols[i]]
+    async def _anim_overheat(self, message, name, bet, symbols_before, symbols_after):
+        """Показывает возгорание и взрывы клеток рядом с бомбами."""
+        burned_idx = [
+            i for i in range(5)
+            if symbols_before[i] != symbols_after[i]
+        ]
         if not burned_idx:
             return
 
-        shown = list(old_symbols)
-        for idx in burned_idx:
-            shown[idx] = "🔥"
+        exploded_idx = []
+        for i in burned_idx:
+            if any(
+                0 <= neighbor < 5 and symbols_before[neighbor] == "💣"
+                for neighbor in (i - 1, i + 1)
+            ):
+                exploded_idx.append(i)
+
+        line = list(symbols_before)
+        for i in burned_idx:
+            line[i] = "🔥"
         await self._render(
-            message, name, bet, " | ".join(shown),
-            "🔥 <b>ВОЗГОРАНИЕ!</b> <i>Ячейки загорелись...</i>"
+            message, name, bet, " | ".join(line),
+            "🔥 <b>ВОЗГОРАНИЕ!</b>"
         )
-        await asyncio.sleep(1.05)
+        await asyncio.sleep(1.1)
+
+        if exploded_idx:
+            for i in exploded_idx:
+                line[i] = "💥"
+                await self._render(
+                    message, name, bet, " | ".join(line),
+                    "💥 <b>ВЗРЫВ!</b> <i>Огонь рядом с бомбой...</i>"
+                )
+                await asyncio.sleep(1.1)
+
+            for i in exploded_idx:
+                line[i] = "🔥"
+            await self._render(
+                message, name, bet, " | ".join(line),
+                "🔥 <b>Всё горит!</b>"
+            )
+            await asyncio.sleep(1.1)
 
     def _apply_chain_explosion(self, symbols):
         line = list(symbols)
