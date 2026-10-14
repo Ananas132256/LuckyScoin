@@ -131,10 +131,13 @@ class Admin:
     # ---------- ПАНЕЛЬ ----------
 
     def _admin_kb(self):
+        unseen = self.brain.db.count_unseen_complaints()
+        complaint_label = f"📮 Жалобы ({unseen})" if unseen else "📮 Жалобы"
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить",   callback_data="admin_refresh")],
             [InlineKeyboardButton(text="💰 Экономика",  callback_data="admin_econ")],
             [InlineKeyboardButton(text="👑 Админы",     callback_data="admin_admins")],
+            [InlineKeyboardButton(text=complaint_label, callback_data="admin_complaints")],
             [InlineKeyboardButton(text="📜 Лог",        callback_data="admin_log")],
             [InlineKeyboardButton(text="🛠 Техперерыв",  callback_data="admin_maint")],
             [InlineKeyboardButton(text="📋 Помощь",     callback_data="admin_help")],

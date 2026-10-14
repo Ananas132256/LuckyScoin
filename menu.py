@@ -14,6 +14,7 @@ BUTTONS = {
     "inv":      "🎒 Инвентарь",
     "about":    "ℹ️ О боте",
     "settings": "⚙️ Настройки",
+    "complaint": "📮 Жалоба",
 }
 
 LAYOUTS = {
@@ -25,6 +26,7 @@ LAYOUTS = {
             ["trade", "profile"],
             ["top", "inv"],
             ["about", "settings"],
+            ["complaint"],
         ],
     },
     "compact": {
@@ -34,7 +36,7 @@ LAYOUTS = {
             ["shop", "trade"],
             ["profile", "inv"],
             ["top", "about"],
-            ["settings"],
+            ["settings", "complaint"],
         ],
     },
     "social": {
@@ -44,7 +46,7 @@ LAYOUTS = {
             ["trade", "casino"],
             ["play", "inv"],
             ["shop", "about"],
-            ["settings"],
+            ["settings", "complaint"],
         ],
     },
     "competitive": {
@@ -54,7 +56,7 @@ LAYOUTS = {
             ["casino", "trade"],
             ["profile", "shop"],
             ["inv", "about"],
-            ["settings"],
+            ["settings", "complaint"],
         ],
     },
     "minimal": {
@@ -65,6 +67,7 @@ LAYOUTS = {
             ["profile"],
             ["inv"],
             ["about"],
+            ["complaint"],
         ],
     },
 }

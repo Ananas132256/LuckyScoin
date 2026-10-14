@@ -4,7 +4,7 @@ import asyncio
 import math
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
@@ -67,7 +67,10 @@ class Game:
     # ============================================================
     #  НАСТРОЙКИ
     # ============================================================
-    LEVEL_REQ = {"common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100}
+    LEVEL_REQ = {
+        "common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100,
+        "advanced": 12,
+    }
     STICKY_CHANCE = 0.15
     MAX_REROLLS = 100
     # Вес выпадения значка по редкости: чем реже значок, тем ниже шанс.
@@ -107,6 +110,7 @@ class Game:
         "rare":     ("Редкая",        250,   1000,      5),
         "ultra":    ("Ультраредкая",  1000,  10000,     15),
         "epic":     ("Эпическая",     10000, 1000000,   50),
+        "advanced": ("Продвинутое",  100,   5000,       1.5),
     }
 
     SPIN_ANIM = {
@@ -115,6 +119,10 @@ class Game:
         "rare":     {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.20, "last_stop_delay": 2.40, "label": "💫"},
         "ultra":    {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.30, "last_stop_delay": 2.60, "label": "🔥"},
         "epic":     {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.50, "last_stop_delay": 3.00, "label": "👾"},
+        "advanced": {
+            "spin_frames": 3, "spin_delay": 1.10, "stop_delay": 1.10,
+            "last_stop_delay": 1.20, "fake_stops": 1, "label": "🎰",
+        },
     }
 
     NOISE = ["🎰", "🍒", "🍋", "7️⃣", "🎲", "🍀", "⚙️", "🪙", "💎", "🔔"]
@@ -132,6 +140,22 @@ class Game:
         ("🔥🔥🔥🔥🔥", 0.75, 0.50),   # 5
     ]
     FIRE_PENALTY = 0.20   # -20% за каждый 🔥
+    ROULETTE_TICKET_PRICE_SC = 5
+    MAX_TICKETS = 10
+    ROULETTE_PRIZES = (
+        {"symbol": "💰", "name": "Деньги", "chance": 35, "currency": "lc", "amount": 50},
+        {"symbol": "🎁", "name": "Подарок", "chance": 30, "currency": "sc", "amount": 100},
+        {"symbol": "🍀", "name": "Клевер", "chance": 20, "currency": "lc", "amount": 500},
+        {"symbol": "💎", "name": "Бриллиант", "chance": 10, "currency": "lc", "amount": 5000},
+        {
+            "symbol": "👑", "name": "Корона", "chance": 4, "currency": "lc",
+            "amount": 50000, "medal": "leaf", "medal_chance": 0.25,
+        },
+        {
+            "symbol": "🌌", "name": "Космос", "chance": 1, "currency": "lc",
+            "amount": 500000, "medal": "four_leaf_clover", "medal_chance": 0.10,
+        },
+    )
 
     def __init__(self, brain):
         self.brain = brain
@@ -139,10 +163,13 @@ class Game:
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "play")(self.cb_play)
         dp.callback_query(F.data.startswith("choose_"))(self.cb_choose_type)
+        dp.callback_query(F.data == "advanced_patterns")(self.cb_advanced_patterns)
         dp.callback_query(F.data.startswith("again_"))(self.cb_spin_again)
         dp.callback_query(F.data == "cancel_bet")(self.cb_cancel_bet)
         dp.callback_query(F.data == "locked")(self.cb_locked)
-        dp.callback_query(F.data == "free_lc")(self.cb_free_lc)
+        dp.callback_query(F.data == "roulette")(self.cb_roulette)
+        dp.callback_query(F.data == "roulette_buy")(self.roulette_buy)
+        dp.callback_query(F.data == "roulette_spin")(self.roulette_spin)
         dp.callback_query(F.data == "exchange")(self.cb_exchange)
         dp.message(BetStates.waiting_for_bet)(self.on_bet_input)
 
@@ -213,6 +240,7 @@ class Game:
     def _spin(self, reroll_count=0, effects=None):
         effects = effects or {}
         luck = effects.get("luck", 0)
+        rare_symbol_bonus = effects.get("rare_symbol_bonus", 0)
         keys = list(self.SYMBOLS.keys())
         factor = max(0.5 ** reroll_count, 1e-9)
         weights = []
@@ -225,6 +253,8 @@ class Game:
                     w *= max(0.1, 1 - luck)
                 elif k in ("7️⃣", "🎲", "🍀"):
                     w *= (1 + luck * 2)
+            if rare_symbol_bonus > 0 and k in ("7️⃣", "🎲"):
+                w *= 1 + rare_symbol_bonus
             weights.append(max(w, 1e-9))
 
         result = []
@@ -234,6 +264,15 @@ class Game:
             else:
                 result.append(random.choices(keys, weights=weights, k=1)[0])
         return result
+
+    def _spin_grid(self, reroll_count=0, effects=None, stage=0):
+        """Генерирует три линии; перегрев применяется только к центральной."""
+        grid = [
+            self._spin(reroll_count, effects)
+            for _ in range(3)
+        ]
+        grid[1], _, _ = self._apply_overheat(grid[1], stage, effects)
+        return grid
 
     def _apply_overheat(self, symbols, stage, effects=None):
         """
@@ -294,12 +333,89 @@ class Game:
                     }
         return {"action": "loss"}
 
+    def _evaluate_line(self, symbols, effects=None):
+        """Оценивает одну линию для продвинутой крутки."""
+        effects = effects or {}
+        bomb_shield = effects.get("bomb_shield", 0)
+        sym, run = _best_run(symbols)
+        if run >= 3:
+            pay = self.SYMBOLS[sym]["pay"].get(run, 0)
+            is_item = pay == "item"
+            mult = 5.0 if is_item else float(pay)
+            if sym == "💣" and mult < 0 and bomb_shield > 0:
+                mult *= max(0.0, 1 - bomb_shield)
+            result = {
+                "won": True,
+                "mult": mult,
+                "desc": f"{sym} × {run}",
+                "unstable": self.SYMBOLS[sym]["reroll"],
+                "item": is_item,
+            }
+            return result
+
+        if "🔥" not in symbols:
+            for pattern in self.PATTERNS:
+                if _match_pattern(symbols, pattern["pattern"]):
+                    return {
+                        "won": True,
+                        "mult": float(pattern.get("mult", 1)),
+                        "desc": pattern.get("name", "Особый паттерн"),
+                        "unstable": False,
+                        "item": False,
+                    }
+
+        return {
+            "won": False, "mult": 0.0, "desc": "проигрыш",
+            "unstable": False, "item": False,
+        }
+
+    def _evaluate_grid(self, grid, effects=None):
+        """Оценивает три линии и общий бонус за число выигравших."""
+        line_results = [
+            self._evaluate_line(line, effects)
+            for line in grid
+        ]
+        lines_won = sum(result["won"] for result in line_results)
+        multiplier_sum = sum(
+            result["mult"] for result in line_results if result["won"]
+        )
+        line_bonus = 4 if lines_won == 3 else 2 if lines_won == 2 else 1
+        reroll_grid = all(result["unstable"] for result in line_results)
+        if reroll_grid:
+            action = "reroll"
+        elif lines_won:
+            action = "win"
+        else:
+            action = "loss"
+        return {
+            "action": action,
+            "total_mult": multiplier_sum * line_bonus,
+            "lines_won": lines_won,
+            "descriptions": [result["desc"] for result in line_results],
+            "reroll_grid": reroll_grid,
+            "line_bonus": line_bonus,
+            "line_results": line_results,
+            "is_item": any(result["item"] for result in line_results),
+        }
+
     # ---------- ОТРИСОВКА ----------
 
     async def _safe_edit(self, message, text, **kwargs):
         try:
             await message.edit_text(text, **kwargs)
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(error.retry_after + 1)
+            try:
+                await message.edit_text(text, **kwargs)
+            except TelegramBadRequest:
+                pass
         except TelegramBadRequest:
+            pass
+
+    async def _safe_answer(self, query, *args, **kwargs):
+        try:
+            await query.answer(*args, **kwargs)
+        except Exception:
             pass
 
     async def _render(self, message, name, bet, line_display, header, extra=""):
@@ -312,6 +428,36 @@ class Game:
             text += f"{extra}\n"
         text += f"\n<blockquote>{line_display}</blockquote>"
         await self._safe_edit(message, text, parse_mode="HTML")
+
+    async def _render_grid(self, message, name, bet, grid_display, header, extra=""):
+        title = name if name == "Продвинутое казино" else f"{name} крутка"
+        text = (
+            f"🎰 <b>{title}</b>\n"
+            f"💰 Ставка: {bet} LC\n\n"
+        )
+        if extra:
+            text += f"{extra}\n\n"
+        text += f"{header}\n<blockquote>{grid_display}</blockquote>"
+        await self._safe_edit(message, text, parse_mode="HTML")
+
+    async def _anim_reveal_grid(self, message, name, bet, grid, cfg):
+        """Открывает сетку по одному столбцу за каждый кадр."""
+        for columns_shown in range(6):
+            rows = []
+            for line in grid:
+                shown = line[:columns_shown]
+                cells = shown + ["🌫️"] * (5 - columns_shown)
+                rows.append(" | ".join(cells))
+            await self._render_grid(
+                message, name, bet, "\n".join(rows),
+                f"{cfg['label']} <b>Стоп!</b> "
+                f"<code>{columns_shown}/5</code>",
+            )
+            delay = (
+                cfg["last_stop_delay"]
+                if columns_shown == 5 else cfg["stop_delay"]
+            )
+            await asyncio.sleep(delay)
 
     async def _anim_spin(self, message, name, bet, cfg):
         frames = cfg["spin_frames"]
@@ -423,10 +569,43 @@ class Game:
 
     # ---------- ГЛАВНЫЙ ЦИКЛ ----------
 
+    async def _resolve_advanced(self, message, bet, user_id, cfg, effects, stage):
+        name = "Продвинутое казино"
+        reroll_count = 0
+        while True:
+            grid = self._spin_grid(reroll_count, effects, stage)
+            await self._anim_reveal_grid(message, name, bet, grid, cfg)
+            verdict = self._evaluate_grid(grid, effects)
+
+            if verdict["reroll_grid"] and reroll_count < self.MAX_REROLLS:
+                reroll_count += 1
+                continue
+            break
+
+        effects["_advanced_result"] = verdict
+        return (
+            verdict["total_mult"],
+            verdict["is_item"],
+            grid,
+            reroll_count,
+            effects,
+            "🔥" in grid[1],
+            0,
+        )
+
     async def _resolve(self, message, name, bet, spin_key, user_id):
         cfg = self.SPIN_ANIM.get(spin_key, self.SPIN_ANIM["common"])
         effects = self._effects(user_id)
+        staff = self.brain.db.get_staff(user_id)
+        if 6 in staff:
+            effects["overheat_reduction"] = 0.25
+        if 8 in staff:
+            effects["rare_symbol_bonus"] = 0.10
         stage, _ = self.brain.db.get_overheat_stage(user_id)
+        if spin_key == "advanced":
+            return await self._resolve_advanced(
+                message, bet, user_id, cfg, effects, stage
+            )
 
         total_mult = 0.0
         is_item_any = False
@@ -498,7 +677,11 @@ class Game:
         self.brain.db.add_balance(user_id, "lc", -bet)
 
         name, _, _, spin_mult = self.SPIN_TYPES[spin_key]
-        msg = await message.answer(f"🎰 <b>{name} крутка</b>\n\nКрутим...",
+        game_title = (
+            "Продвинутое казино" if spin_key == "advanced"
+            else f"{name} крутка"
+        )
+        msg = await message.answer(f"🎰 <b>{game_title}</b>\n\nКрутим...",
                                    parse_mode="HTML")
 
         self.brain.db.increment_badge_rolls(user_id)
@@ -511,7 +694,13 @@ class Game:
         effective_mult = total_mult * (1 + mult_bonus) if total_mult > 0 else total_mult
 
         # Штраф за 🔥
-        fire_count = symbols.count("🔥")
+        advanced_result = (
+            effects.get("_advanced_result") if spin_key == "advanced" else None
+        )
+        fire_count = (
+            sum(line.count("🔥") for line in symbols)
+            if spin_key == "advanced" else symbols.count("🔥")
+        )
         fire_reduction = effects.get("fire_reduction", 0)
         penalty_per_fire = self.FIRE_PENALTY * (1 - min(fire_reduction, 1.0))
         fire_factor = max(0.0, 1 - penalty_per_fire * fire_count)
@@ -546,8 +735,15 @@ class Game:
         self.brain.db.add_bet_stats(user_id, bet, win_amount)
 
         # Базовый прирост + ускорение от экипированных значков.
-        overheat_gain = 1 + int(effects.get("overheat_speed", 0))
-        self.brain.db.add_overheat(user_id, overheat_gain)
+        overheat_gain = (
+            1 if spin_key == "advanced"
+            else 1 + int(effects.get("overheat_speed", 0))
+        )
+        self.brain.db.add_overheat(
+            user_id,
+            overheat_gain,
+            reduction=effects.get("overheat_reduction", 0),
+        )
 
         xp_gain = spin_mult * 20 * (2 if win_amount > 0 else 1)
         xp_bonus = effects.get("xp_bonus", 0)
@@ -586,13 +782,41 @@ class Game:
             pass
 
         # --- Результат ---
-        slot_line = " | ".join(symbols)
-        result = f"🎰 <b>{name} крутка</b>\n\n"
-        result += f"💰 Ставка: {bet} LC\n\n"
-        result += f"<blockquote>{slot_line}</blockquote>\n\n"
+        if spin_key == "advanced":
+            slot_grid = "\n".join(" | ".join(line) for line in symbols)
+            result = f"🎰 <b>{game_title}</b>\n\n"
+            result += f"💰 Ставка: {bet} LC\n\n"
+            result += f"<blockquote>{slot_grid}</blockquote>\n\n"
+            for index, line_result in enumerate(
+                advanced_result["line_results"], start=1
+            ):
+                if line_result["won"]:
+                    result += (
+                        f"✅ Линия {index}: {line_result['desc']} "
+                        f"(x{line_result['mult']:g})\n"
+                    )
+                else:
+                    result += f"❌ Линия {index}: проигрыш\n"
+            if advanced_result["lines_won"]:
+                bonus_text = (
+                    f" (бонус ×{advanced_result['line_bonus']})"
+                    if advanced_result["line_bonus"] > 1 else ""
+                )
+                result += (
+                    f"\n🎉 Выиграло линий: "
+                    f"<b>{advanced_result['lines_won']}</b>{bonus_text}\n"
+                )
+            if rerolls:
+                result += f"🔄 Общих рероллов: <b>{rerolls}</b>\n"
+        else:
+            slot_line = " | ".join(symbols)
+            result = f"🎰 <b>{game_title}</b>\n\n"
+            result += f"💰 Ставка: {bet} LC\n\n"
+            result += f"<blockquote>{slot_line}</blockquote>\n\n"
 
         if rerolls > 0:
-            result += f"🔄 Рероллов: <b>{rerolls}</b>\n"
+            if spin_key != "advanced":
+                result += f"🔄 Рероллов: <b>{rerolls}</b>\n"
 
         if fire_count > 0:
             total_penalty = int(penalty_per_fire * fire_count * 100)
@@ -610,7 +834,10 @@ class Game:
 
         if win_amount > 0:
             final_mult = effective_mult * spin_mult * fire_factor
-            result += f"✅ <b>+{win_amount} LC</b> (x{final_mult:g})"
+            if spin_key == "advanced":
+                result += f"💰 Итого: <b>+{win_amount} LC</b> (x{final_mult:g})"
+            else:
+                result += f"✅ <b>+{win_amount} LC</b> (x{final_mult:g})"
             if mult_bonus > 0:
                 result += f" <i>(+{int(mult_bonus*100)}% от значков)</i>"
             result += "\n"
@@ -648,86 +875,136 @@ class Game:
     # ---------- МЕНЮ ----------
 
     async def cb_play(self, query: CallbackQuery, state: FSMContext = None):
-        if state:
-            await state.clear()
-        user_id = query.from_user.id
-        lc = self.brain.db.get_balance(user_id, "lc")
-        level, xp = self.brain.db.get_level_xp(user_id)
-        xp_needed = 100 * (level + 1)
-        last_free = self.brain.db.get_last_free_lc(user_id)
-        can_get_free = (time.time() - last_free) > 3600
+        try:
+            if state:
+                await state.clear()
+            user_id = query.from_user.id
+            last_free = self.brain.db.get_last_free_lc(user_id)
+            tickets = self.brain.db.get_tickets(user_id)
+            free_ticket_awarded = False
+            if time.time() - last_free >= 3600 and tickets < self.MAX_TICKETS:
+                self.brain.db.add_tickets(user_id, 1)
+                self.brain.db.set_last_free_lc(user_id, int(time.time()))
+                tickets = self.brain.db.get_tickets(user_id)
+                free_ticket_awarded = True
 
-        # Перегрев
-        oh_stage, oh_score = self.brain.db.get_overheat_stage(user_id)
-        oh_icon, _, _ = self.OVERHEAT_STAGES[oh_stage]
+            lc = self.brain.db.get_balance(user_id, "lc")
+            level, xp = self.brain.db.get_level_xp(user_id)
+            xp_needed = 100 * (level + 1)
 
-        # Эффекты
-        effects = self._effects(user_id)
-        eff_line = ""
-        if effects:
-            try:
-                from cosmetics import describe_effect_dict
-                eff_line = f"\n✨ <i>{describe_effect_dict(effects)}</i>"
-            except Exception:
-                pass
+            # Перегрев
+            oh_stage, oh_score = self.brain.db.get_overheat_stage(user_id)
+            oh_icon, _, _ = self.OVERHEAT_STAGES[oh_stage]
 
-        text = (f"🎰 <b>Игровой зал LuckyScoin</b>\n\n"
-                f"💰 Баланс LC: {lc}\n"
-                f"⭐ Уровень: {level} (XP: {xp}/{xp_needed})\n"
-                f"🔥 Перегрев: {oh_icon} <code>({oh_score}/100)</code>"
-                f"{eff_line}\n\n"
-                f"Выбери тип крутки:")
-        if can_get_free:
-            text += "\n\n🎁 Доступны бесплатные LC!"
+            # Эффекты
+            effects = self._effects(user_id)
+            eff_line = ""
+            if effects:
+                try:
+                    from cosmetics import describe_effect_dict
+                    eff_line = f"\n✨ <i>{describe_effect_dict(effects)}</i>"
+                except Exception:
+                    pass
 
-        buttons = []
-        for key, (name, min_b, max_b, mult) in self.SPIN_TYPES.items():
-            req = self.LEVEL_REQ[key]
-            if level >= req:
-                buttons.append([InlineKeyboardButton(
-                    text=f"{name} ({min_b}-{max_b} LC)",
-                    callback_data=f"choose_{key}")])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=f"🔒 {name} (с {req} ур.)",
-                    callback_data="locked")])
-        if can_get_free:
-            buttons.append([InlineKeyboardButton(text="🎁 Забрать бесплатные LC", callback_data="free_lc")])
-        buttons.append([InlineKeyboardButton(text="💱 Обменять LC на SC", callback_data="exchange")])
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+            text = (f"🎰 <b>Игровой зал LuckyScoin</b>\n\n"
+                    f"💰 Баланс LC: {lc}\n"
+                    f"⭐ Уровень: {level} (XP: {xp}/{xp_needed})\n"
+                    f"🔥 Перегрев: {oh_icon} <code>({oh_score}/100)</code>"
+                    f"{eff_line}\n\n"
+                    f"Выбери тип крутки:")
+            if free_ticket_awarded:
+                text += "\n\n🎁 Получен бесплатный билет на рулетку!"
+            elif tickets >= self.MAX_TICKETS:
+                text += "\n\n🎟 Максимум билетиков на руках."
 
-        await self._safe_edit(query.message, text,
-                              reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                              parse_mode="HTML")
-        await query.answer()
+            buttons = []
+            for key, (name, min_b, max_b, mult) in self.SPIN_TYPES.items():
+                req = self.LEVEL_REQ[key]
+                button_name = (
+                    "🎰 Продвинутое казино"
+                    if key == "advanced" else name
+                )
+                if level >= req:
+                    buttons.append([InlineKeyboardButton(
+                        text=f"{button_name} ({min_b}-{max_b} LC)",
+                        callback_data=f"choose_{key}")])
+                else:
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🔒 {button_name} (с {req} ур.)",
+                        callback_data="locked")])
+            buttons.append([InlineKeyboardButton(
+                text=f"🎟 Рулетка ({tickets} билетов)",
+                callback_data="roulette",
+            )])
+            buttons.append([InlineKeyboardButton(text="💱 Обменять LC на SC", callback_data="exchange")])
+            buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+
+            await self._safe_edit(
+                query.message, text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode="HTML",
+            )
+            await self._safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка игрового меню: {error}")
+            await self._safe_answer(query, "Не удалось открыть игровое меню.", show_alert=True)
 
     async def cb_locked(self, query: CallbackQuery):
-        await query.answer("🔒 Недостаточный уровень!", show_alert=True)
+        try:
+            await self._safe_answer(query, "🔒 Недостаточный уровень!", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка заблокированной крутки: {error}")
 
     async def _ask_bet(self, query, spin_key, state):
         if spin_key not in self.SPIN_TYPES:
-            return await query.answer("Неизвестный тип!", show_alert=True)
+            return await self._safe_answer(query, "Неизвестный тип!", show_alert=True)
         user_id = query.from_user.id
         level, _ = self.brain.db.get_level_xp(user_id)
         if level < self.LEVEL_REQ.get(spin_key, 0):
-            return await query.answer(f"Нужен уровень {self.LEVEL_REQ[spin_key]}!", show_alert=True)
+            return await self._safe_answer(
+                query, f"Нужен уровень {self.LEVEL_REQ[spin_key]}!",
+                show_alert=True,
+            )
         name, min_b, max_b, mult = self.SPIN_TYPES[spin_key]
         await state.set_state(BetStates.waiting_for_bet)
         await state.update_data(spin_key=spin_key, min_bet=min_b, max_bet=max_b)
-        text = (f"🎰 <b>{name} крутка</b>\n\n"
+        title = "Продвинутое казино" if spin_key == "advanced" else f"{name} крутка"
+        text = (f"🎰 <b>{title}</b>\n\n"
                 f"Введи ставку в LC (от {min_b} до {max_b}).")
+        keyboard_rows = [
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_bet")]
+        ]
+        if spin_key == "advanced":
+            keyboard_rows.insert(0, [InlineKeyboardButton(
+                text="📐 Свои паттерны", callback_data="advanced_patterns"
+            )])
         await self._safe_edit(
             query.message, text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_bet")]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
             parse_mode="HTML")
-        await query.answer()
+        await self._safe_answer(query)
 
     async def cb_choose_type(self, query: CallbackQuery, state: FSMContext):
-        await self._ask_bet(query, query.data.split("_", 1)[1], state)
+        try:
+            await self._ask_bet(query, query.data.split("_", 1)[1], state)
+        except Exception as error:
+            print(f"⚠️ Ошибка выбора типа крутки: {error}")
+            await self._safe_answer(query, "Не удалось выбрать крутку.", show_alert=True)
 
     async def cb_spin_again(self, query: CallbackQuery, state: FSMContext):
-        await self._ask_bet(query, query.data.split("_", 1)[1], state)
+        try:
+            await self._ask_bet(query, query.data.split("_", 1)[1], state)
+        except Exception as error:
+            print(f"⚠️ Ошибка повторного выбора крутки: {error}")
+            await self._safe_answer(query, "Не удалось повторить крутку.", show_alert=True)
+
+    async def cb_advanced_patterns(self, query: CallbackQuery):
+        try:
+            # Позже здесь появится настройка собственных паттернов.
+            await self._safe_answer(query, "📐 Свои паттерны — скоро!", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка заглушки паттернов: {error}")
+            await self._safe_answer(query, "Не удалось открыть паттерны.", show_alert=True)
 
     async def cb_cancel_bet(self, query: CallbackQuery, state: FSMContext):
         await state.clear()
@@ -757,19 +1034,154 @@ class Game:
         await state.clear()
         await self._start_game(message, spin_key, bet)
 
-    # ---------- ПРОЧИЕ ----------
+    # ---------- РУЛЕТКА ЗА БИЛЕТИКИ ----------
 
-    async def cb_free_lc(self, query: CallbackQuery):
-        user_id = query.from_user.id
-        last = self.brain.db.get_last_free_lc(user_id)
-        if (time.time() - last) < 3600:
-            return await query.answer(
-                f"Подожди {int((3600 - (time.time() - last)) // 60)} мин.",
-                show_alert=True)
-        self.brain.db.add_balance(user_id, "lc", 15)
-        self.brain.db.set_last_free_lc(user_id, int(time.time()))
-        await query.answer("🎁 +15 LC!", show_alert=True)
-        await self.cb_play(query)
+    @classmethod
+    def _pick_roulette_result(cls):
+        """Выбирает приз согласно заданным процентным шансам."""
+        return random.choices(
+            cls.ROULETTE_PRIZES,
+            weights=[prize["chance"] for prize in cls.ROULETTE_PRIZES],
+            k=1,
+        )[0]
+
+    def _roulette_keyboard(self):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🎰 Крутить (1 билет)", callback_data="roulette_spin"
+            )],
+            [InlineKeyboardButton(
+                text="🛒 Купить билет (5 SC)", callback_data="roulette_buy"
+            )],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="play")],
+        ])
+
+    async def cb_roulette(self, query: CallbackQuery, state: FSMContext):
+        try:
+            await state.clear()
+            tickets = self.brain.db.get_tickets(query.from_user.id)
+            text = (
+                "🎟 <b>Билетная рулетка</b>\n\n"
+                f"🎫 Билетиков: <b>{tickets}/{self.MAX_TICKETS}</b>\n"
+                "💰 35%: +50 LC · 🎁 30%: +100 SC\n"
+                "🍀 20%: +500 LC · 💎 10%: +5 000 LC\n"
+                "👑 4%: +50 000 LC, шанс 25% на 🍃 медаль\n"
+                "🌌 1%: +500 000 LC, шанс 10% на 🍀 медаль\n\n"
+                "🎰 Выбери действие:"
+            )
+            await self._safe_edit(
+                query.message, text,
+                reply_markup=self._roulette_keyboard(),
+                parse_mode="HTML",
+            )
+            await self._safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка открытия рулетки: {error}")
+            await self._safe_answer(query, "Не удалось открыть рулетку.", show_alert=True)
+
+    async def roulette_buy(self, query: CallbackQuery, state: FSMContext):
+        try:
+            await state.clear()
+            user_id = query.from_user.id
+            tickets = self.brain.db.get_tickets(user_id)
+            if tickets >= self.MAX_TICKETS:
+                await self._safe_answer(query, "🎟 Максимум билетиков.", show_alert=True)
+                return
+            balance = self.brain.db.get_balance(user_id, "sc")
+            if balance < self.ROULETTE_TICKET_PRICE_SC:
+                await self._safe_answer(
+                    query, "Недостаточно SC. Нужно 5 SC.", show_alert=True
+                )
+                return
+
+            self.brain.db.add_balance(user_id, "sc", -self.ROULETTE_TICKET_PRICE_SC)
+            self.brain.db.add_tickets(user_id, 1)
+            tickets = self.brain.db.get_tickets(user_id)
+            text = (
+                "🎟 <b>Билетная рулетка</b>\n\n"
+                f"✅ Куплен 1 билет за {self.ROULETTE_TICKET_PRICE_SC} SC.\n"
+                f"🎫 Билетиков: <b>{tickets}/{self.MAX_TICKETS}</b>\n"
+                "🎰 Выбери действие:"
+            )
+            await self._safe_edit(
+                query.message, text,
+                reply_markup=self._roulette_keyboard(),
+                parse_mode="HTML",
+            )
+            await self._safe_answer(query, "✅ Билет куплен!")
+        except Exception as error:
+            print(f"⚠️ Ошибка покупки билетика: {error}")
+            await self._safe_answer(query, "Не удалось купить билет.", show_alert=True)
+
+    async def roulette_spin(self, query: CallbackQuery, state: FSMContext):
+        try:
+            await state.clear()
+            user_id = query.from_user.id
+            if not self.brain.db.spend_ticket(user_id):
+                await self._safe_answer(query, "Нет билетиков для крутки.", show_alert=True)
+                return
+            prize = self._pick_roulette_result()
+            medal_won = (
+                "medal" in prize
+                and random.random() < prize["medal_chance"]
+            )
+            symbols = [entry["symbol"] for entry in self.ROULETTE_PRIZES]
+            slots = [random.choice(symbols) for _ in range(4)] + [prize["symbol"]]
+            await self._safe_answer(query)
+            await self._anim_roulette(
+                query.message, user_id, prize, slots, medal_won
+            )
+        except Exception as error:
+            print(f"⚠️ Ошибка крутки рулетки: {error}")
+            await self._safe_answer(query, "Не удалось выполнить крутку.", show_alert=True)
+
+    async def _anim_roulette(self, message, user_id, prize, slots, medal_won):
+        """Показывает не более пяти кадров, с паузой 1,1 секунды."""
+        for frame, position in enumerate((0, 1, 2, 3, 4)):
+            if frame:
+                await asyncio.sleep(1.1)
+            arrow = "   ".join(
+                "▼" if index == position else "　"
+                for index in range(len(slots))
+            )
+            text = (
+                "🎟 <b>Билетная рулетка</b>\n\n"
+                f"<code>{arrow}</code>\n"
+                f"{' | '.join(slots)}\n\n"
+                f"<i>Крутим... {frame + 1}/5</i>"
+            )
+
+            if frame == 4:
+                self.brain.db.add_balance(
+                    user_id, prize["currency"], prize["amount"]
+                )
+                result_line = (
+                    f"🎉 Выпало: <b>{prize['symbol']} {prize['name']}</b>\n"
+                    f"💰 Приз: <b>+{prize['amount']} {prize['currency'].upper()}</b>\n"
+                    f"🎫 Осталось билетиков: "
+                    f"<b>{self.brain.db.get_tickets(user_id)}/{self.MAX_TICKETS}</b>"
+                )
+                if medal_won:
+                    from cosmetics import BADGES
+
+                    badge = BADGES[prize["medal"]]
+                    self.brain.db.add_item(user_id, badge["shop_id"])
+                    result_line += (
+                        f"\n🎖 Дополнительно получена медаль: "
+                        f"<b>{badge['name']}</b>"
+                    )
+                text = (
+                    "🎟 <b>Билетная рулетка</b>\n\n"
+                    f"<code>{arrow}</code>\n"
+                    f"{' | '.join(slots)}\n\n"
+                    f"{result_line}"
+                )
+
+            await self._safe_edit(
+                message, text,
+                reply_markup=self._roulette_keyboard(),
+                parse_mode="HTML",
+            )
 
     async def cb_exchange(self, query: CallbackQuery):
         user_id = query.from_user.id

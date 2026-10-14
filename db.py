@@ -5,29 +5,35 @@ import time
 
 class DB:
     ROOMS = {
-        1:  {"name": "🎰 Слот-зал",       "income": 30,     "cost": 0,        "req": 0,  "desc": "Классические автоматы"},
-        2:  {"name": "🃏 Покерный зал",   "income": 80,     "cost": 1000,     "req": 1,  "desc": "Столы для покера"},
-        3:  {"name": "🎡 Рулетка",        "income": 200,    "cost": 2500,     "req": 3,  "desc": "Колесо фортуны"},
-        4:  {"name": "🍸 Бар",            "income": 500,    "cost": 6000,     "req": 5,  "desc": "Напитки и закуски"},
-        5:  {"name": "🎲 VIP-зал",        "income": 1200,   "cost": 15000,    "req": 8,  "desc": "Для крупных игроков"},
-        6:  {"name": "🏨 Отель",          "income": 3000,   "cost": 40000,    "req": 12, "desc": "Гости казино"},
-        7:  {"name": "🎭 Шоу-программа",  "income": 8000,   "cost": 100000,   "req": 16, "desc": "Развлечения каждый вечер"},
-        8:  {"name": "🌐 Онлайн-казино",  "income": 20000,  "cost": 250000,   "req": 22, "desc": "Игроки со всего мира"},
-        9:  {"name": "🚁 VIP-вертолётка", "income": 50000,  "cost": 600000,   "req": 30, "desc": "Только для элиты"},
-        10: {"name": "👑 Империя",        "income": 130000, "cost": 1500000,  "req": 40, "desc": "Легендарный бизнес"},
+        # Окупаемость указана как cost / доход зала, без бонуса сотрудников.
+        1:  {"name": "🎰 Слот-зал",       "income": 30,     "cost": 0,        "req": 0,   "desc": "Классические автоматы"},  # Бесплатный старт
+        2:  {"name": "🃏 Покерный зал",   "income": 75,     "cost": 1000,     "req": 3,   "desc": "Столы для покера"},  # Окупаемость: 13,3 ч
+        3:  {"name": "🎡 Рулетка",        "income": 190,    "cost": 2500,     "req": 8,   "desc": "Колесо фортуны"},  # Окупаемость: 13,2 ч
+        4:  {"name": "🍸 Бар",            "income": 450,    "cost": 6000,     "req": 15,  "desc": "Напитки и закуски"},  # Окупаемость: 13,3 ч
+        5:  {"name": "🎲 VIP-зал",        "income": 1150,   "cost": 15000,    "req": 25,  "desc": "Для крупных игроков"},  # Окупаемость: 13,0 ч
+        6:  {"name": "🏨 Отель",          "income": 3000,   "cost": 40000,    "req": 35,  "desc": "Гости казино"},  # Окупаемость: 13,3 ч
+        7:  {"name": "🎭 Шоу-программа",  "income": 7500,   "cost": 100000,   "req": 50,  "desc": "Развлечения каждый вечер"},  # Окупаемость: 13,3 ч
+        8:  {"name": "🌐 Онлайн-казино",  "income": 19000,  "cost": 250000,   "req": 65,  "desc": "Игроки со всего мира"},  # Окупаемость: 13,2 ч
+        9:  {"name": "🚁 VIP-вертолётка", "income": 46000,  "cost": 600000,   "req": 80,  "desc": "Только для элиты"},  # Окупаемость: 13,0 ч
+        10: {"name": "👑 Империя",        "income": 120000, "cost": 1500000,  "req": 100, "desc": "Легендарный бизнес"},  # Окупаемость: 12,5 ч
     }
 
     STAFF = {
-        1: {"name": "🎩 Крупье",   "bonus": 0.10, "cost": 2000,   "desc": "+10% к доходу"},
-        2: {"name": "🍺 Бармен",   "bonus": 0.15, "cost": 8000,   "desc": "+15% к доходу"},
-        3: {"name": "💪 Охрана",   "bonus": 0.00, "cost": 25000,  "desc": "Защита от ограблений"},
-        4: {"name": "📊 Менеджер", "bonus": 0.25, "cost": 100000, "desc": "+25% к доходу"},
-        5: {"name": "📣 Пиарщик",  "bonus": 0.50, "cost": 500000, "desc": "+50% к доходу"},
+        # Окупаемость бонусных сотрудников зависит от текущего дохода всех залов.
+        1: {"name": "🎩 Крупье",   "bonus": 0.08, "cost": 500,    "desc": "+8% к доходу"},  # Около 63–104 ч при доходе 60–100 LC/ч
+        2: {"name": "🍺 Бармен",   "bonus": 0.12, "cost": 3000,   "desc": "+12% к доходу"},  # Около 60–85 ч при доходе 300–400 LC/ч
+        3: {"name": "💪 Охрана",   "bonus": 0.00, "cost": 15000,  "desc": "Защита от ограблений"},
+        4: {"name": "📊 Менеджер", "bonus": 0.20, "cost": 60000,  "desc": "+20% к доходу"},  # Около 50–75 ч при доходе 4000–6000 LC/ч
+        5: {"name": "📣 Пиарщик",  "bonus": 0.35, "cost": 250000, "desc": "+35% к доходу"},  # Около 35–70 ч при доходе 10000–20000 LC/ч
+        6: {"name": "🔮 Гадалка",   "bonus": 0.00, "cost": 50000,  "desc": "На 25% уменьшает прирост перегрева за спин"},
+        7: {"name": "💼 Бухгалтер", "bonus": 0.00, "cost": 150000, "desc": "Автоматически собирает доход раз в 9 часов (накопление ограничено 8 часами)"},
+        8: {"name": "🎰 Механик",   "bonus": 0.00, "cost": 200000, "desc": "На 10% повышает вес выпадения 🎲 и 7️⃣ в слотах"},
     }
 
     CASINO_MAX_HOURS = 8
+    CASINO_AUTO_COLLECT_SECONDS = 9 * 3600
     SHOP_REFRESH_SECONDS = 6 * 3600
-    SHOP_PER_CATEGORY = 3
+    SHOP_TOTAL_ITEMS = 3   # значков в одной ротации магазина
 
     EVENT_COOLDOWN = 3600
     EVENT_CHANCE = 0.5
@@ -56,6 +62,7 @@ class DB:
                 level INTEGER DEFAULT 0,
                 xp INTEGER DEFAULT 0,
                 last_free_lc INTEGER DEFAULT 0,
+                tickets INTEGER DEFAULT 0,
                 layout TEXT DEFAULT 'classic',
                 title TEXT DEFAULT '',
                 streak INTEGER DEFAULT 0,
@@ -186,6 +193,19 @@ class DB:
                 timestamp INTEGER DEFAULT 0
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS complaints (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                username   TEXT,
+                text       TEXT NOT NULL,
+                status     TEXT DEFAULT 'new',
+                admin_id   INTEGER DEFAULT 0,
+                answer     TEXT DEFAULT '',
+                created_at INTEGER DEFAULT 0,
+                updated_at INTEGER DEFAULT 0
+            )
+        """)
 
         self._migrate()
         self._init_items()
@@ -206,6 +226,7 @@ class DB:
             "level":           "INTEGER DEFAULT 0",
             "xp":              "INTEGER DEFAULT 0",
             "last_free_lc":    "INTEGER DEFAULT 0",
+            "tickets":         "INTEGER DEFAULT 0",
             "layout":          "TEXT DEFAULT 'classic'",
             "title":           "TEXT DEFAULT ''",
             "streak":          "INTEGER DEFAULT 0",
@@ -272,6 +293,58 @@ class DB:
             )
 
         from cosmetics import ITEMS, BADGES, TITLES
+        legacy_badge_destinations = {
+            "☘️ Трёхлистный клевер": ITEMS["three_leaf_clover"]["shop_id"],
+            "🍀 Четырёхлистный клевер": ITEMS["four_leaf_clover"]["shop_id"],
+            "🎲 D6 (целый)": ITEMS["d6_full"]["shop_id"],
+            "🔥 Огненный шар": ITEMS["fireball"]["shop_id"],
+            "⛽ Канистра с бензином": ITEMS["fuel_canister"]["shop_id"],
+        }
+        old_badge_rows = self.conn.execute(
+            "SELECT item_id, name FROM items WHERE category='badge'"
+        ).fetchall()
+        badge_id_migrations = {
+            old_id: legacy_badge_destinations[name]
+            for old_id, name in old_badge_rows
+            if name in legacy_badge_destinations
+            and old_id != legacy_badge_destinations[name]
+        }
+        if badge_id_migrations:
+            old_ids = tuple(badge_id_migrations)
+            placeholders = ",".join("?" for _ in old_ids)
+            inventory_rows = self.conn.execute(
+                f"SELECT user_id, item_id, quantity FROM inventory "
+                f"WHERE item_id IN ({placeholders})",
+                old_ids,
+            ).fetchall()
+            self.conn.execute(
+                f"DELETE FROM inventory WHERE item_id IN ({placeholders})",
+                old_ids,
+            )
+            for user_id, old_id, quantity in inventory_rows:
+                new_id = badge_id_migrations[old_id]
+                self.conn.execute(
+                    "INSERT INTO inventory (user_id, item_id, quantity) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, item_id) DO UPDATE SET "
+                    "quantity=inventory.quantity + excluded.quantity",
+                    (user_id, new_id, quantity),
+                )
+            for instance_id, old_id in self.conn.execute(
+                f"SELECT instance_id, item_id FROM user_luck_items "
+                f"WHERE item_id IN ({placeholders})",
+                old_ids,
+            ).fetchall():
+                self.conn.execute(
+                    "UPDATE user_luck_items SET item_id=? WHERE instance_id=?",
+                    (badge_id_migrations[old_id], instance_id),
+                )
+
+        self.conn.execute(
+            "UPDATE user_badges SET badge_id='fuel_canister' "
+            "WHERE badge_id='gasoline_canister'"
+        )
+
         for item in ITEMS.values():
             self.conn.execute(
                 "INSERT INTO items (item_id, name, price_sc, rarity, category) "
@@ -442,6 +515,33 @@ class DB:
         self._ensure(user_id)
         self.conn.execute("UPDATE users SET last_free_lc = ? WHERE user_id=?", (timestamp, user_id))
         self.conn.commit()
+
+    def get_tickets(self, user_id) -> int:
+        self._ensure(user_id)
+        cur = self.conn.execute("SELECT tickets FROM users WHERE user_id=?", (user_id,))
+        return cur.fetchone()[0]
+
+    def add_tickets(self, user_id, amount: int):
+        """Добавляет билетики, не позволяя превысить лимит хранения."""
+        self._ensure(user_id)
+        amount = max(0, int(amount))
+        if amount == 0:
+            return
+        self.conn.execute(
+            "UPDATE users SET tickets=MIN(10, tickets + ?) WHERE user_id=?",
+            (amount, user_id)
+        )
+        self.conn.commit()
+
+    def spend_ticket(self, user_id) -> bool:
+        """Атомарно тратит один билет, если он есть."""
+        self._ensure(user_id)
+        cur = self.conn.execute(
+            "UPDATE users SET tickets=tickets-1 WHERE user_id=? AND tickets>0",
+            (user_id,)
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def get_level_xp(self, user_id):
         self._ensure(user_id)
@@ -729,14 +829,22 @@ class DB:
             for cat in categories:
                 cur = self.conn.execute("SELECT item_id FROM items WHERE category=?", (cat,))
                 ids = [r[0] for r in cur.fetchall()]
-                if cat in ("badge", "title"):
+                if cat == "badge":
+                    ids = [
+                        item_id for item_id in ids
+                        if item_id in purchasable_cosmetics
+                    ]
+                    selected.extend(random.sample(
+                        ids, min(self.SHOP_TOTAL_ITEMS, len(ids))
+                    ))
+                elif cat == "title":
                     selected.extend(
                         item_id for item_id in ids
                         if item_id in purchasable_cosmetics
                     )
                 else:
                     random.shuffle(ids)
-                    selected.extend(ids[:self.SHOP_PER_CATEGORY])
+                    selected.extend(ids[:self.SHOP_TOTAL_ITEMS])
             self.conn.execute("DELETE FROM shop_stock")
             for iid in selected:
                 self.conn.execute("INSERT INTO shop_stock (item_id) VALUES (?)", (iid,))
@@ -751,11 +859,14 @@ class DB:
             JOIN items ON shop_stock.item_id = items.item_id
             ORDER BY items.category, items.price_sc
         """)
-        return [
+        rows = [
             row for row in cur.fetchall()
             if row[4] not in ("badge", "title")
             or row[0] in purchasable_cosmetics
         ]
+        badge_rows = [row for row in rows if row[4] == "badge"]
+        random.shuffle(badge_rows)
+        return badge_rows + [row for row in rows if row[4] != "badge"]
 
     def get_shop_next_refresh(self):
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
@@ -849,6 +960,17 @@ class DB:
 
     def has_guard(self, user_id):
         return 3 in self.get_staff(user_id)
+
+    def auto_collect_casino(self, user_id):
+        """Собирает доход каждые 9 часов, если нанят бухгалтер."""
+        if 7 not in self.get_staff(user_id):
+            return None
+        casino = self.get_casino(user_id)
+        if not casino:
+            return None
+        if int(time.time()) - casino["last_collect"] < self.CASINO_AUTO_COLLECT_SECONDS:
+            return 0
+        return self.collect_casino(user_id)
 
     def get_income_per_hour(self, user_id):
         rooms = self.get_rooms(user_id)
@@ -1119,6 +1241,109 @@ class DB:
 
     # ================= ЗНАЧКИ =================
 
+    def get_all_owned_badges(self, user_id):
+        """Возвращает медали игрока из слотов и инвентаря без повторов."""
+        from cosmetics import BADGES
+
+        equipped = self.get_user_badges_full(user_id)
+        slot_by_badge = {}
+        for slot, info in equipped.items():
+            slot_by_badge.setdefault(info["badge_id"], []).append(slot)
+
+        owned = []
+        for badge_id, badge in BADGES.items():
+            quantity = self.has_item(user_id, badge["shop_id"])
+            slots = slot_by_badge.get(badge_id, [])
+            if slots or quantity:
+                owned.append({
+                    "badge_id": badge_id,
+                    "name": badge["name"],
+                    "slots": slots,
+                    "quantity": quantity,
+                })
+        return owned
+
+    def transfer_badge(self, from_id, to_id, badge_id):
+        """Передаёт одну медаль, сохраняя её прочность при переносе из слота."""
+        from cosmetics import BADGES, badge_slots_for_level
+
+        badge = BADGES.get(badge_id)
+        if not badge:
+            return False
+
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            cur = self.conn.execute(
+                "SELECT slot, hp, roll_count FROM user_badges "
+                "WHERE user_id=? AND badge_id=? ORDER BY slot LIMIT 1",
+                (from_id, badge_id)
+            )
+            equipped = cur.fetchone()
+            if equipped:
+                source_slot, hp, roll_count = equipped
+                self.conn.execute(
+                    "DELETE FROM user_badges WHERE user_id=? AND slot=?",
+                    (from_id, source_slot)
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
+                    (from_id, badge["shop_id"])
+                )
+                inventory_item = cur.fetchone()
+                if not inventory_item or inventory_item[0] <= 0:
+                    self.conn.rollback()
+                    return False
+                quantity = inventory_item[0] - 1
+                if quantity:
+                    self.conn.execute(
+                        "UPDATE inventory SET quantity=? WHERE user_id=? AND item_id=?",
+                        (quantity, from_id, badge["shop_id"])
+                    )
+                else:
+                    self.conn.execute(
+                        "DELETE FROM inventory WHERE user_id=? AND item_id=?",
+                        (from_id, badge["shop_id"])
+                    )
+                hp = badge.get("hp", 1)
+                if hp == "inf":
+                    hp = -1
+                roll_count = 0
+
+            cur = self.conn.execute(
+                "SELECT level FROM users WHERE user_id=?", (to_id,)
+            )
+            row = cur.fetchone()
+            level = row[0] if row else 0
+            max_slots = badge_slots_for_level(level)
+            cur = self.conn.execute(
+                "SELECT slot FROM user_badges WHERE user_id=?", (to_id,)
+            )
+            occupied = {row[0] for row in cur.fetchall()}
+            free_slot = next(
+                (slot for slot in range(max_slots) if slot not in occupied),
+                None,
+            )
+
+            if free_slot is not None:
+                self.conn.execute(
+                    "INSERT INTO user_badges "
+                    "(user_id, slot, badge_id, hp, roll_count) VALUES (?, ?, ?, ?, ?)",
+                    (to_id, free_slot, badge_id, hp, roll_count)
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, 1) "
+                    "ON CONFLICT(user_id, item_id) "
+                    "DO UPDATE SET quantity=quantity+1",
+                    (to_id, badge["shop_id"])
+                )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def get_user_badges(self, user_id):
         result = {i: None for i in range(5)}
         cur = self.conn.execute(
@@ -1313,9 +1538,13 @@ class DB:
         stage = min(self.OVERHEAT_MAX_STAGE, score // self.OVERHEAT_PER_STAGE)
         return stage, score
 
-    def add_overheat(self, user_id, amount=1):
+    def add_overheat(self, user_id, amount=1, reduction=0):
         """Добавляет очки перегрева за спин, не превышая максимум."""
         self._ensure(user_id)
+        reduced_amount = max(0, amount * (1 - min(max(reduction, 0), 1)))
+        amount = int(reduced_amount)
+        if random.random() < reduced_amount - amount:
+            amount += 1
         cur = self.conn.execute(
             "SELECT overheat_score FROM users WHERE user_id=?",
             (user_id,)
@@ -1398,3 +1627,90 @@ class DB:
     def user_exists(self, user_id):
         cur = self.conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
         return cur.fetchone() is not None
+
+    # ================= ЖАЛОБЫ =================
+
+    def add_complaint(self, user_id, username, text):
+        """Создаёт жалобу и возвращает её ID."""
+        now = int(time.time())
+        cur = self.conn.execute(
+            "INSERT INTO complaints "
+            "(user_id, username, text, status, admin_id, answer, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'new', 0, '', ?, ?)",
+            (user_id, username, text, now, now)
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_user_complaints(self, user_id, limit=3):
+        """Возвращает последние жалобы пользователя, новые сверху."""
+        limit = max(1, min(50, int(limit)))
+        cur = self.conn.execute(
+            "SELECT id, text, status, answer, created_at, updated_at "
+            "FROM complaints WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, limit)
+        )
+        columns = ("id", "text", "status", "answer", "created_at", "updated_at")
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+    def get_all_complaints(self, status=None, limit=50):
+        """Возвращает жалобы, при необходимости отфильтрованные по статусу."""
+        limit = max(1, min(50, int(limit)))
+        if status is None:
+            cur = self.conn.execute(
+                "SELECT id, user_id, username, text, status, admin_id, answer, "
+                "created_at, updated_at FROM complaints ORDER BY id DESC LIMIT ?",
+                (limit,)
+            )
+        else:
+            cur = self.conn.execute(
+                "SELECT id, user_id, username, text, status, admin_id, answer, "
+                "created_at, updated_at FROM complaints WHERE status=? "
+                "ORDER BY id DESC LIMIT ?",
+                (status, limit)
+            )
+        columns = (
+            "id", "user_id", "username", "text", "status", "admin_id",
+            "answer", "created_at", "updated_at",
+        )
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+    def get_complaint(self, complaint_id):
+        """Возвращает одну жалобу или None."""
+        cur = self.conn.execute(
+            "SELECT id, user_id, username, text, status, admin_id, answer, "
+            "created_at, updated_at FROM complaints WHERE id=?",
+            (complaint_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        columns = (
+            "id", "user_id", "username", "text", "status", "admin_id",
+            "answer", "created_at", "updated_at",
+        )
+        return dict(zip(columns, row))
+
+    def update_complaint(self, complaint_id, admin_id, status, answer=None):
+        """Обновляет жалобу, сохраняя ответ, если он не передан."""
+        now = int(time.time())
+        if answer is None:
+            cur = self.conn.execute(
+                "UPDATE complaints SET status=?, admin_id=?, updated_at=? WHERE id=?",
+                (status, admin_id, now, complaint_id)
+            )
+        else:
+            cur = self.conn.execute(
+                "UPDATE complaints SET status=?, admin_id=?, answer=?, updated_at=? "
+                "WHERE id=?",
+                (status, admin_id, answer, now, complaint_id)
+            )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def count_unseen_complaints(self):
+        """Возвращает число новых, ещё не просмотренных жалоб."""
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM complaints WHERE status='new'"
+        )
+        return cur.fetchone()[0]

@@ -1,10 +1,21 @@
+import html
 import time
+
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+)
 
 
 TRADE_FEE_PERCENT = 5   # комиссия в SC (сжигается)
+
+
+async def safe_answer(query, *args, **kwargs):
+    try:
+        await query.answer(*args, **kwargs)
+    except Exception:
+        pass
 
 
 class Trade:
@@ -16,178 +27,338 @@ class Trade:
     def register(self, dp: Dispatcher):
         dp.message(Command("trade"))(self.cmd_trade)
         dp.callback_query(F.data == "trade")(self.cb_trade_info)
+        dp.callback_query(F.data == "trade_pick_badge")(self.cb_pick_badge)
+        dp.callback_query(F.data.startswith("trade_select_badge_"))(self.cb_select_badge)
         dp.callback_query(F.data.startswith("trade_accept_"))(self.cb_accept)
         dp.callback_query(F.data.startswith("trade_decline_"))(self.cb_decline)
 
-    async def cb_trade_info(self, query: CallbackQuery):
-        text = (
-            "💱 **Трейд SC**\n\n"
-            "Обмен SC с другим игроком.\n\n"
-            "**Формат:**\n"
-            "`/trade @username <даю_SC> <хочу_SC>`\n\n"
-            "**Пример:**\n"
-            "`/trade @vasya 5 3`\n"
-            "Ты отдаёшь 5 SC, получаешь 3 SC.\n\n"
-            f"Комиссия: {TRADE_FEE_PERCENT}% с принимающего."
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]
-        ])
+    def _badge(self, badge_id):
+        from cosmetics import BADGES
+        return BADGES.get(badge_id)
+
+    def _parse_asset(self, value):
+        if value.startswith("badge:"):
+            badge_id = value[len("badge:"):]
+            if not badge_id or not self._badge(badge_id):
+                raise ValueError("Неизвестная медаль.")
+            return {"type": "badge", "badge_id": badge_id}
         try:
-            await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception:
-            pass
-        await query.answer()
+            amount = int(value)
+        except ValueError as error:
+            raise ValueError("Используй количество SC или badge:<ID>.") from error
+        if amount <= 0:
+            raise ValueError("Количество SC должно быть больше 0.")
+        return {"type": "sc", "amount": amount}
+
+    def _asset_label(self, asset):
+        if asset["type"] == "sc":
+            return f"{asset['amount']} SC"
+        badge = self._badge(asset["badge_id"])
+        return f"медаль {badge['name']}"
+
+    def _fee_for(self, asset):
+        if asset["type"] != "sc":
+            return 0
+        return max(1, (asset["amount"] * TRADE_FEE_PERCENT) // 100)
+
+    def _owns_badge(self, user_id, badge_id):
+        return any(
+            badge["badge_id"] == badge_id
+            for badge in self.brain.db.get_all_owned_badges(user_id)
+        )
+
+    async def cb_trade_info(self, query: CallbackQuery):
+        try:
+            text = (
+                "💱 <b>Трейд SC и медалей</b>\n\n"
+                "Создай предложение командой:\n"
+                "<code>/trade @username &lt;даю&gt; &lt;хочу&gt;</code>\n\n"
+                "<b>Числа означают SC, медаль задаётся как badge:&lt;ID&gt;:</b>\n"
+                "<code>/trade @vasya 100 500</code>\n"
+                "<code>/trade @vasya badge:leaf 500</code>\n"
+                "<code>/trade @vasya 500 badge:d6_full</code>\n"
+                "<code>/trade @vasya badge:leaf badge:four_leaf_clover</code>\n\n"
+                f"Комиссия: {TRADE_FEE_PERCENT}% с SC, которые платит принимающий."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🎖 Выбрать значок", callback_data="trade_pick_badge"
+                )],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
+            ])
+            await query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка инструкции трейда: {error}")
+            await safe_answer(query, "Не удалось открыть инструкцию.", show_alert=True)
+
+    async def cb_pick_badge(self, query: CallbackQuery):
+        try:
+            owned = self.brain.db.get_all_owned_badges(query.from_user.id)
+            rows = []
+            for badge in owned:
+                sources = []
+                if badge["slots"]:
+                    sources.append(
+                        "надета: " + ", ".join(str(slot + 1) for slot in badge["slots"])
+                    )
+                if badge["quantity"]:
+                    sources.append(f"в инвентаре: {badge['quantity']}")
+                rows.append([InlineKeyboardButton(
+                    text=f"{badge['name']} ({'; '.join(sources)})",
+                    callback_data=f"trade_select_badge_{badge['badge_id']}",
+                )])
+            if not rows:
+                text = "🎖 <b>Твои медали</b>\n\nНет медалей для обмена."
+            else:
+                text = (
+                    "🎖 <b>Твои медали</b>\n\n"
+                    "Выбери медаль, чтобы скопировать её ID для команды трейда."
+                )
+            rows.append([InlineKeyboardButton(
+                text="⬅️ Назад", callback_data="trade"
+            )])
+            await query.message.edit_text(
+                text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                parse_mode="HTML",
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка списка медалей для трейда: {error}")
+            await safe_answer(query, "Не удалось загрузить медали.", show_alert=True)
+
+    async def cb_select_badge(self, query: CallbackQuery):
+        try:
+            badge_id = query.data.removeprefix("trade_select_badge_")
+            badge = self._badge(badge_id)
+            if not badge:
+                await safe_answer(query, "Медаль не найдена.", show_alert=True)
+                return
+            text = (
+                f"🎖 Выбрана медаль: <b>{badge['name']}</b>\n"
+                f"ID: <code>{html.escape(badge_id)}</code>\n\n"
+                "Скопируй ID в команду:\n"
+                f"<code>/trade @username badge:{html.escape(badge_id)} 500</code>\n"
+                f"<code>/trade @username 500 badge:{html.escape(badge_id)}</code>"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⬅️ К медалям", callback_data="trade_pick_badge")
+            ]])
+            await query.message.edit_text(
+                text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка выбора медали для трейда: {error}")
+            await safe_answer(query, "Не удалось выбрать медаль.", show_alert=True)
 
     async def cmd_trade(self, message: Message):
-        parts = message.text.split()
-        if len(parts) != 4:
-            return await message.answer(
-                "📝 **Формат:**\n"
-                "`/trade @username <даю_SC> <хочу_SC>`\n\n"
-                "Пример: `/trade @vasya 5 3`\n"
-                "Ты отдаёшь 5 SC, хочешь 3 SC.",
-                parse_mode="Markdown"
-            )
-
-        target_username = parts[1].lstrip("@")
         try:
-            give = int(parts[2])
-            want = int(parts[3])
-        except ValueError:
-            return await message.answer("❌ Числа должны быть целыми.")
+            parts = (message.text or "").split()
+            if len(parts) != 4:
+                return await message.answer(
+                    "💱 <b>Формат:</b>\n"
+                    "<code>/trade @username &lt;даю&gt; &lt;хочу&gt;</code>\n\n"
+                    "<code>/trade @vasya 100 500</code> — обмен SC\n"
+                    "<code>/trade @vasya badge:leaf 500</code> — медаль на SC\n"
+                    "<code>/trade @vasya 500 badge:d6_full</code> — SC на медаль\n"
+                    "<code>/trade @vasya badge:leaf badge:four_leaf_clover</code>\n\n"
+                    "Для медалей используй <code>badge:&lt;ID&gt;</code>.",
+                    parse_mode="HTML",
+                )
 
-        if give <= 0 or want <= 0:
-            return await message.answer("❌ Числа должны быть больше 0.")
+            target_username = parts[1].lstrip("@")
+            if not target_username:
+                return await message.answer("❌ Укажи username получателя.")
+            give = self._parse_asset(parts[2])
+            want = self._parse_asset(parts[3])
 
-        target_id = self.brain.db.get_user_by_username(target_username)
-        if not target_id:
-            return await message.answer(f"❌ Юзер @{target_username} не найден в боте.")
+            target_id = self.brain.db.get_user_by_username(target_username)
+            if not target_id:
+                return await message.answer(
+                    f"❌ Юзер @{html.escape(target_username)} не найден в боте."
+                )
+            my_id = message.from_user.id
+            if target_id == my_id:
+                return await message.answer("❌ Нельзя трейдить с самим собой.")
 
-        my_id = message.from_user.id
-        if target_id == my_id:
-            return await message.answer("❌ Нельзя трейдить с самим собой.")
+            if give["type"] == "sc":
+                my_sc = self.brain.db.get_balance(my_id, "sc")
+                if my_sc < give["amount"]:
+                    return await message.answer(
+                        f"❌ Недостаточно SC. У тебя {my_sc}, нужно {give['amount']}."
+                    )
+            elif not self._owns_badge(my_id, give["badge_id"]):
+                return await message.answer("❌ У тебя нет этой медали.")
 
-        my_sc = self.brain.db.get_balance(my_id, "sc")
-        if my_sc < give:
-            return await message.answer(f"❌ Недостаточно SC. У тебя {my_sc}, нужно {give}.")
+            fee = self._fee_for(want)
+            if want["type"] == "sc":
+                target_sc = self.brain.db.get_balance(target_id, "sc")
+                required = want["amount"] + fee
+                if target_sc < required:
+                    return await message.answer(
+                        f"❌ У @{html.escape(target_username)} только {target_sc} SC. "
+                        f"Для сделки нужно {required} "
+                        f"(включая комиссию {fee})."
+                    )
 
-        target_sc = self.brain.db.get_balance(target_id, "sc")
-        fee = max(1, (want * TRADE_FEE_PERCENT) // 100)
-        if target_sc < want + fee:
-            return await message.answer(
-                f"❌ У @{target_username} только {target_sc} SC. "
-                f"Для сделки нужно {want + fee} (включая комиссию {fee})."
+            self.counter += 1
+            trade_id = self.counter
+            self.pending[trade_id] = {
+                "from_id": my_id,
+                "to_id": target_id,
+                "give": give,
+                "want": want,
+                "ts": time.time(),
+            }
+            my_name = html.escape(
+                message.from_user.username or message.from_user.first_name or "anon"
             )
-
-        self.counter += 1
-        trade_id = self.counter
-        self.pending[trade_id] = {
-            "from_id": my_id,
-            "to_id": target_id,
-            "give": give,
-            "want": want,
-            "ts": time.time(),
-        }
-
-        my_name = message.from_user.username or message.from_user.first_name or "anon"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять",  callback_data=f"trade_accept_{trade_id}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"trade_decline_{trade_id}")],
-        ])
-
-        try:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Принять", callback_data=f"trade_accept_{trade_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отклонить", callback_data=f"trade_decline_{trade_id}"
+                )],
+            ])
+            fee_line = (
+                f"Комиссия с тебя: <b>{fee} SC</b>\n"
+                if fee else ""
+            )
             await self.brain.bot.send_message(
                 target_id,
-                f"💱 **Предложение трейда**\n\n"
+                "💱 <b>Предложение трейда</b>\n\n"
                 f"От: @{my_name}\n"
-                f"Он даёт тебе: **{give} SC**\n"
-                f"Он хочет от тебя: **{want} SC**\n"
-                f"Комиссия: **{fee} SC**\n\n"
-                f"Итого ты отдашь: {want + fee} SC",
-                reply_markup=kb,
-                parse_mode="Markdown"
+                f"Он даёт тебе: <b>{html.escape(self._asset_label(give))}</b>\n"
+                f"Он хочет от тебя: <b>{html.escape(self._asset_label(want))}</b>\n"
+                f"{fee_line}\n"
+                "Принять предложение?",
+                reply_markup=keyboard,
+                parse_mode="HTML",
             )
-            await message.answer(f"✅ Предложение отправлено @{target_username}.")
-        except Exception as e:
-            del self.pending[trade_id]
-            await message.answer(f"❌ Не смог отправить сообщение: {e}")
+            await message.answer(
+                f"✅ Предложение отправлено @{html.escape(target_username)}."
+            )
+        except ValueError as error:
+            await message.answer(f"❌ {html.escape(str(error))}")
+        except Exception as error:
+            print(f"⚠️ Ошибка создания трейда: {error}")
+            await message.answer("❌ Не удалось создать предложение трейда.")
 
     async def cb_accept(self, query: CallbackQuery):
         try:
-            trade_id = int(query.data.replace("trade_accept_", ""))
-        except ValueError:
-            return await query.answer("❌ Ошибка", show_alert=True)
+            trade_id = int(query.data.removeprefix("trade_accept_"))
+            trade = self.pending.get(trade_id)
+            if not trade:
+                return await safe_answer(query, "Предложение устарело.", show_alert=True)
+            if query.from_user.id != trade["to_id"]:
+                return await safe_answer(query, "Это не твоё предложение.", show_alert=True)
 
-        trade = self.pending.get(trade_id)
-        if not trade:
-            return await query.answer("Предложение устарело.", show_alert=True)
+            # Сразу блокируем повторное принятие одного предложения.
+            del self.pending[trade_id]
+            from_id = trade["from_id"]
+            to_id = trade["to_id"]
+            give = trade["give"]
+            want = trade["want"]
+            fee = self._fee_for(want)
 
-        if query.from_user.id != trade["to_id"]:
-            return await query.answer("Это не твоё предложение.", show_alert=True)
+            if give["type"] == "sc":
+                if self.brain.db.get_balance(from_id, "sc") < give["amount"]:
+                    return await safe_answer(
+                        query, "У отправителя уже нет столько SC.", show_alert=True
+                    )
+            elif not self._owns_badge(from_id, give["badge_id"]):
+                return await safe_answer(
+                    query, "У отправителя больше нет этой медали.", show_alert=True
+                )
 
-        # Забираем сделку из pending до проверок баланса, чтобы исключить двойное принятие.
-        del self.pending[trade_id]
+            if want["type"] == "sc":
+                required = want["amount"] + fee
+                if self.brain.db.get_balance(to_id, "sc") < required:
+                    return await safe_answer(
+                        query, f"Нужно {required} SC (включая комиссию).",
+                        show_alert=True,
+                    )
+            elif not self._owns_badge(to_id, want["badge_id"]):
+                return await safe_answer(
+                    query, "У тебя больше нет этой медали.", show_alert=True
+                )
 
-        from_id = trade["from_id"]
-        to_id = trade["to_id"]
-        give = trade["give"]
-        want = trade["want"]
-        fee = max(1, (want * TRADE_FEE_PERCENT) // 100)
+            badge_transfers = []
+            if give["type"] == "badge":
+                badge_transfers.append((from_id, to_id, give["badge_id"]))
+            if want["type"] == "badge":
+                badge_transfers.append((to_id, from_id, want["badge_id"]))
+            for sender, recipient, badge_id in badge_transfers:
+                if not self.brain.db.transfer_badge(sender, recipient, badge_id):
+                    return await safe_answer(
+                        query, "Не удалось передать медаль.", show_alert=True
+                    )
 
-        if self.brain.db.get_balance(from_id, "sc") < give:
-            return await query.answer("У отправителя уже нет столько SC.", show_alert=True)
-        if self.brain.db.get_balance(to_id, "sc") < want + fee:
-            return await query.answer(f"Нужно {want + fee} SC (включая комиссию).", show_alert=True)
+            if give["type"] == "sc":
+                self.brain.db.add_balance(from_id, "sc", -give["amount"])
+                self.brain.db.add_balance(to_id, "sc", give["amount"])
+            if want["type"] == "sc":
+                self.brain.db.add_balance(to_id, "sc", -(want["amount"] + fee))
+                self.brain.db.add_balance(from_id, "sc", want["amount"])
 
-        # Выполняем
-        self.brain.db.add_balance(from_id, "sc", -give)
-        self.brain.db.add_balance(to_id, "sc", give)
-        self.brain.db.add_balance(to_id, "sc", -(want + fee))
-        self.brain.db.add_balance(from_id, "sc", want)
-        # fee сжигается
+            try:
+                await query.message.edit_text(
+                    "✅ <b>Трейд завершён</b>\n\n"
+                    f"Ты получил: <b>{html.escape(self._asset_label(give))}</b>\n"
+                    f"Ты отдал: <b>{html.escape(self._asset_label(want))}</b>"
+                    + (f"\nКомиссия: <b>{fee} SC</b>" if fee else ""),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            await safe_answer(query)
 
-        try:
-            await query.message.edit_text(
-                f"✅ **Трейд завершён**\n\n"
-                f"Ты получил: +{give} SC\n"
-                f"Ты отдал: -{want} SC\n"
-                f"Комиссия: -{fee} SC",
-                parse_mode="Markdown"
+            receiver_name = html.escape(
+                query.from_user.username or query.from_user.first_name or "игроком"
             )
-        except Exception:
-            pass
-
-        try:
-            await self.brain.bot.send_message(
-                from_id,
-                f"✅ **Трейд с @{query.from_user.username or 'юзером'} завершён**\n\n"
-                f"Ты получил: +{want} SC\n"
-                f"Ты отдал: -{give} SC",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
+            try:
+                await self.brain.bot.send_message(
+                    from_id,
+                    "✅ <b>Трейд завершён</b>\n\n"
+                    f"Ты получил: <b>{html.escape(self._asset_label(want))}</b>\n"
+                    f"Ты отдал: <b>{html.escape(self._asset_label(give))}</b>\n"
+                    f"Партнёр: @{receiver_name}"
+                    + (f"\nКомиссия с партнёра: <b>{fee} SC</b>" if fee else ""),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        except (TypeError, ValueError) as error:
+            await safe_answer(query, f"❌ Ошибка трейда: {error}", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка принятия трейда: {error}")
+            await safe_answer(query, "Не удалось завершить трейд.", show_alert=True)
 
     async def cb_decline(self, query: CallbackQuery):
         try:
-            trade_id = int(query.data.replace("trade_decline_", ""))
-        except ValueError:
-            return await query.answer("❌ Ошибка", show_alert=True)
+            trade_id = int(query.data.removeprefix("trade_decline_"))
+            trade = self.pending.get(trade_id)
+            if not trade:
+                return await safe_answer(query, "Уже устарело.", show_alert=True)
+            if query.from_user.id != trade["to_id"]:
+                return await safe_answer(query, "Это не твоё предложение.", show_alert=True)
 
-        trade = self.pending.get(trade_id)
-        if not trade:
-            return await query.answer("Уже устарело.", show_alert=True)
-
-        if query.from_user.id != trade["to_id"]:
-            return await query.answer("Это не твоё предложение.", show_alert=True)
-
-        del self.pending[trade_id]
-        try:
-            await query.message.edit_text("❌ Трейд отклонён.")
-        except Exception:
-            pass
-        try:
-            await self.brain.bot.send_message(trade["from_id"], "❌ Трейд отклонён.")
-        except Exception:
-            pass
+            del self.pending[trade_id]
+            try:
+                await query.message.edit_text("❌ Трейд отклонён.")
+            except Exception:
+                pass
+            await safe_answer(query)
+            try:
+                await self.brain.bot.send_message(
+                    trade["from_id"], "❌ Трейд отклонён."
+                )
+            except Exception:
+                pass
+        except (TypeError, ValueError):
+            await safe_answer(query, "❌ Ошибка", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка отклонения трейда: {error}")
+            await safe_answer(query, "Не удалось отклонить трейд.", show_alert=True)

@@ -32,6 +32,18 @@ async def _tick(brain):
             if not casino:
                 continue
 
+            auto_collected = brain.db.auto_collect_casino(uid)
+            if auto_collected is not None:
+                if auto_collected > 0:
+                    await brain.bot.send_message(
+                        uid,
+                        f"💼 <b>Бухгалтер собрал доход казино!</b>\n\n"
+                        f"🏢 {casino['name']}\n"
+                        f"💰 Начислено: <b>{auto_collected} LC</b>",
+                        parse_mode="HTML"
+                    )
+                continue
+
             # Хранилище не заполнено — пропускаем
             pending, elapsed, income = brain.db.get_pending_income(uid)
             if elapsed < brain.db.CASINO_MAX_HOURS * 3600:

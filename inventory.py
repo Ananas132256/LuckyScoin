@@ -1,10 +1,20 @@
+import html
+import random
+
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from cosmetics import (
-    BADGES, TITLES, RARITY_EMOJI, badge_slots_for_level,
-    is_unlocked, describe_effect_dict,
+    BADGES, TITLES, RARITY_EMOJI, CRAFT_CHANCES,
+    badge_slots_for_level, get_next_rarity, is_unlocked, describe_effect_dict,
 )
+
+
+async def safe_answer(query, *args, **kwargs):
+    try:
+        await query.answer(*args, **kwargs)
+    except Exception:
+        pass
 
 
 class Inventory:
@@ -13,6 +23,12 @@ class Inventory:
 
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "inv")(self.cb_inv)
+        dp.callback_query(F.data == "inv_sell")(self.cb_sell)
+        dp.callback_query(F.data.startswith("inv_sell_confirm_"))(self.cb_sell_confirm)
+        dp.callback_query(F.data.startswith("inv_sell_"))(self.cb_sell_item)
+        dp.callback_query(F.data == "inv_craft")(self.cb_craft)
+        dp.callback_query(F.data.startswith("inv_craft_confirm_"))(self.cb_craft_confirm)
+        dp.callback_query(F.data.startswith("inv_craft_"))(self.cb_craft_item)
         dp.callback_query(F.data == "inv_badges")(self.cb_badges)
         dp.callback_query(F.data == "inv_titles")(self.cb_titles)
         dp.callback_query(F.data.startswith("inv_slot_"))(self.cb_slot)
@@ -60,6 +76,80 @@ class Inventory:
         except Exception:
             return "—"
 
+    def _badge_by_shop_id(self, item_id):
+        return next(
+            (
+                (badge_id, badge)
+                for badge_id, badge in BADGES.items()
+                if badge.get("shop_id") == item_id
+            ),
+            (None, None),
+        )
+
+    def _available_badge_quantity(self, user_id, item_id):
+        """Количество экземпляров в инвентаре, не занятых ячейками."""
+        badge_id, badge = self._badge_by_shop_id(item_id)
+        if not badge_id:
+            return 0
+        equipped = self.brain.db.get_user_badges(user_id)
+        equipped_count = sum(1 for owned_id in equipped.values() if owned_id == badge_id)
+        return max(
+            0,
+            self.brain.db.has_item(user_id, item_id) - equipped_count,
+        )
+
+    def _get_craftable_items(self, user_id):
+        """Список ID медалей, которых в инвентаре есть минимум две."""
+        return [
+            item_id
+            for item_id, _, _, _, category in self.brain.db.get_inventory(user_id)
+            if category == "badge"
+            and self._available_badge_quantity(user_id, item_id) >= 2
+            and (badge := self._badge_by_shop_id(item_id)[1])
+            and badge.get("price_sc", 0) > 0
+        ]
+
+    def _pick_craft_result(self, item_id):
+        """Разыгрывает исход крафта и возвращает (ID, медаль) либо None."""
+        badge_id, badge = self._badge_by_shop_id(item_id)
+        rarity = badge.get("rarity") if badge else None
+        if not badge_id or badge.get("price_sc", 0) <= 0:
+            return None
+        if rarity not in CRAFT_CHANCES:
+            return None
+
+        chances = dict(CRAFT_CHANCES[rarity])
+        roll = random.random()
+        if roll < chances["up"]:
+            target_rarity = get_next_rarity(rarity)
+            candidates = [
+                (candidate_id, candidate)
+                for candidate_id, candidate in BADGES.items()
+                if candidate_id != badge_id
+                and candidate.get("rarity") == target_rarity
+                and candidate.get("price_sc", 0) > 0
+            ]
+            if not candidates:
+                candidates = [
+                    (candidate_id, candidate)
+                    for candidate_id, candidate in BADGES.items()
+                    if candidate_id != badge_id
+                    and candidate.get("rarity") == rarity
+                    and candidate.get("price_sc", 0) > 0
+                ]
+        elif roll < chances["up"] + chances["same"]:
+            candidates = [
+                (candidate_id, candidate)
+                for candidate_id, candidate in BADGES.items()
+                if candidate_id != badge_id
+                and candidate.get("rarity") == rarity
+                and candidate.get("price_sc", 0) > 0
+            ]
+        else:
+            return None
+
+        return random.choice(candidates) if candidates else None
+
     # ---------- ГЛАВНЫЙ ЭКРАН ----------
 
     async def cb_inv(self, query: CallbackQuery):
@@ -82,6 +172,14 @@ class Inventory:
             sections.append(
                 [InlineKeyboardButton(text="🎖 Медали", callback_data="inv_badges")]
             )
+            sections.append(
+                [InlineKeyboardButton(
+                    text="💰 Продать значки", callback_data="inv_sell"
+                )]
+            )
+            sections.append(
+                [InlineKeyboardButton(text="⚒ Крафт", callback_data="inv_craft")]
+            )
         if TITLES:
             sections.append(
                 [InlineKeyboardButton(text="🏷 Титулы", callback_data="inv_titles")]
@@ -92,7 +190,252 @@ class Inventory:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
-        await query.answer()
+        await safe_answer(query)
+
+    # ---------- ПРОДАЖА И КРАФТ МЕДАЛЕЙ ----------
+
+    async def cb_sell(self, query: CallbackQuery, notice=None):
+        try:
+            user_id = query.from_user.id
+            inventory = [
+                row for row in self.brain.db.get_inventory(user_id)
+                if row[4] == "badge"
+            ]
+            available_inventory = []
+            for item_id, _, name, _, _ in inventory:
+                quantity = self._available_badge_quantity(user_id, item_id)
+                if quantity > 0:
+                    available_inventory.append((item_id, quantity, name))
+            prefix = f"{notice}\n\n" if notice else ""
+            if not available_inventory:
+                text = (
+                    prefix
+                    + "💰 <b>Продажа медалей</b>\n\n"
+                    "У тебя нет значков для продажи. Сначала сними надетые."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")
+                ]])
+            else:
+                lines = [prefix + "💰 <b>Продажа медалей</b>\n"]
+                buttons = []
+                for item_id, quantity, name in available_inventory:
+                    _, badge = self._badge_by_shop_id(item_id)
+                    price = badge.get("price_sc", 0) if badge else 0
+                    if price > 0:
+                        sale_price = max(1, price // 2)
+                        lines.append(
+                            f"{html.escape(name)} ×{quantity} "
+                            f"({sale_price} SC за штуку)"
+                        )
+                        buttons.append([InlineKeyboardButton(
+                            text=f"Продать {name} ({sale_price} SC)",
+                            callback_data=f"inv_sell_{item_id}",
+                        )])
+                    else:
+                        lines.append(
+                            f"{html.escape(name)} ×{quantity} (не продаётся)"
+                        )
+                buttons.append([InlineKeyboardButton(
+                    text="⬅️ Назад", callback_data="inv"
+                )])
+                text = "\n".join(lines)
+                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+            await query.message.edit_text(
+                text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка экрана продажи медалей: {error}")
+            await safe_answer(
+                query, "Не удалось открыть продажу медалей.", show_alert=True
+            )
+
+    async def cb_sell_item(self, query: CallbackQuery):
+        try:
+            item_id = int(query.data.removeprefix("inv_sell_"))
+            user_id = query.from_user.id
+            _, badge = self._badge_by_shop_id(item_id)
+            if not badge or self._available_badge_quantity(user_id, item_id) < 1:
+                await safe_answer(query, "Значка нет в инвентаре.", show_alert=True)
+                return
+            price = badge.get("price_sc", 0)
+            if price <= 0:
+                await safe_answer(query, "Этот значок нельзя продать.", show_alert=True)
+                return
+
+            sale_price = max(1, price // 2)
+            text = (
+                f"💰 Продать {html.escape(badge['name'])} "
+                f"за <b>{sale_price} SC</b>?"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Продать",
+                    callback_data=f"inv_sell_confirm_{item_id}",
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отмена", callback_data="inv_sell"
+                )],
+            ])
+            await query.message.edit_text(
+                text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка подтверждения продажи: {error}")
+            await safe_answer(query, "Не удалось начать продажу.", show_alert=True)
+
+    async def cb_sell_confirm(self, query: CallbackQuery):
+        try:
+            item_id = int(query.data.removeprefix("inv_sell_confirm_"))
+            user_id = query.from_user.id
+            _, badge = self._badge_by_shop_id(item_id)
+            if not badge or self._available_badge_quantity(user_id, item_id) < 1:
+                await safe_answer(query, "Значка больше нет в инвентаре.", show_alert=True)
+                return
+            price = badge.get("price_sc", 0)
+            if price <= 0:
+                await safe_answer(query, "Этот значок нельзя продать.", show_alert=True)
+                return
+            sale_price = max(1, price // 2)
+            if not self.brain.db.remove_item(user_id, item_id, 1):
+                await safe_answer(query, "Не удалось списать значок.", show_alert=True)
+                return
+
+            self.brain.db.add_balance(user_id, "sc", sale_price)
+            balance = self.brain.db.get_balance(user_id, "sc")
+            notice = (
+                f"✅ Продано: {html.escape(badge['name'])} "
+                f"за {sale_price} SC. Баланс: {balance} SC"
+            )
+            await self.cb_sell(query, notice=notice)
+        except Exception as error:
+            print(f"⚠️ Ошибка продажи медали: {error}")
+            await safe_answer(query, "Не удалось продать значок.", show_alert=True)
+
+    async def cb_craft(self, query: CallbackQuery, notice=None):
+        try:
+            craftable = self._get_craftable_items(query.from_user.id)
+            prefix = f"{notice}\n\n" if notice else ""
+            if not craftable:
+                text = (
+                    prefix
+                    + "⚒ <b>Крафт медалей</b>\n\n"
+                    "У тебя нет пар значков для крафта."
+                )
+                buttons = []
+            else:
+                lines = [prefix + "⚒ <b>Крафт медалей</b>\n"]
+                buttons = []
+                for item_id in craftable:
+                    _, badge = self._badge_by_shop_id(item_id)
+                    rarity = badge["rarity"]
+                    chances = dict(CRAFT_CHANCES[rarity])
+                    next_rarity = get_next_rarity(rarity)
+                    up_icon = RARITY_EMOJI.get(next_rarity, "⚪")
+                    same_icon = RARITY_EMOJI.get(rarity, "⚪")
+                    lines.append(
+                        f"{html.escape(badge['name'])} ×2 → "
+                        f"{up_icon} случайный {next_rarity} "
+                        f"({int(chances['up'] * 100)}%) / "
+                        f"{same_icon} {rarity} "
+                        f"({int(chances['same'] * 100)}%) / "
+                        f"ничего ({int(chances['nothing'] * 100)}%)"
+                    )
+                    buttons.append([InlineKeyboardButton(
+                        text=f"⚒ Крафтить {badge['name']}",
+                        callback_data=f"inv_craft_{item_id}",
+                    )])
+            buttons.append([InlineKeyboardButton(
+                text="⬅️ Назад", callback_data="inv"
+            )])
+            await query.message.edit_text(
+                text if not craftable else "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode="HTML",
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка списка крафта: {error}")
+            await safe_answer(query, "Не удалось открыть крафт.", show_alert=True)
+
+    async def cb_craft_item(self, query: CallbackQuery):
+        try:
+            item_id = int(query.data.removeprefix("inv_craft_"))
+            user_id = query.from_user.id
+            _, badge = self._badge_by_shop_id(item_id)
+            if not badge or self._available_badge_quantity(user_id, item_id) < 2:
+                await safe_answer(query, "Для крафта нужны две одинаковые медали.", show_alert=True)
+                return
+            if badge.get("price_sc", 0) <= 0:
+                await safe_answer(query, "Эту медаль нельзя использовать для крафта.", show_alert=True)
+                return
+            if badge.get("rarity") not in CRAFT_CHANCES:
+                await safe_answer(query, "Эта редкость пока не участвует в крафте.", show_alert=True)
+                return
+
+            chances = dict(CRAFT_CHANCES[badge["rarity"]])
+            text = (
+                f"⚒ Скрафтить 2 × {html.escape(badge['name'])}?\n\n"
+                f"Шансы: {int(chances['up'] * 100)}% "
+                f"{RARITY_EMOJI.get(get_next_rarity(badge['rarity']), '⚪')} "
+                f"{get_next_rarity(badge['rarity'])} / "
+                f"{int(chances['same'] * 100)}% "
+                f"{RARITY_EMOJI.get(badge['rarity'], '⚪')} "
+                f"{badge['rarity']} / "
+                f"{int(chances['nothing'] * 100)}% ничего"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="⚒ Крафтить",
+                    callback_data=f"inv_craft_confirm_{item_id}",
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отмена", callback_data="inv_craft"
+                )],
+            ])
+            await query.message.edit_text(
+                text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            await safe_answer(query)
+        except Exception as error:
+            print(f"⚠️ Ошибка подтверждения крафта: {error}")
+            await safe_answer(query, "Не удалось начать крафт.", show_alert=True)
+
+    async def cb_craft_confirm(self, query: CallbackQuery):
+        try:
+            item_id = int(query.data.removeprefix("inv_craft_confirm_"))
+            user_id = query.from_user.id
+            badge_id, badge = self._badge_by_shop_id(item_id)
+            if not badge_id or self._available_badge_quantity(user_id, item_id) < 2:
+                await safe_answer(query, "Для крафта нужны две одинаковые медали.", show_alert=True)
+                return
+            if badge.get("price_sc", 0) <= 0:
+                await safe_answer(query, "Эту медаль нельзя использовать для крафта.", show_alert=True)
+                return
+            if badge.get("rarity") not in CRAFT_CHANCES:
+                await safe_answer(query, "Эта редкость пока не участвует в крафте.", show_alert=True)
+                return
+            if not self.brain.db.remove_item(user_id, item_id, 2):
+                await safe_answer(query, "Не удалось списать две медали.", show_alert=True)
+                return
+
+            result = self._pick_craft_result(item_id)
+            if result:
+                _, result_badge = result
+                self.brain.db.add_item(user_id, result_badge["shop_id"], 1)
+                notice = (
+                    f"✨ Крафт удался! Получен "
+                    f"{html.escape(result_badge['name'])}"
+                )
+            else:
+                notice = "💨 Крафт не удался. Значки сгорели."
+            await self.cb_craft(query, notice=notice)
+        except Exception as error:
+            print(f"⚠️ Ошибка крафта медалей: {error}")
+            await safe_answer(query, "Не удалось выполнить крафт.", show_alert=True)
 
     # ---------- МЕДАЛИ ----------
 
