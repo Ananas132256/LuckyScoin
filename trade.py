@@ -390,8 +390,8 @@ class Trade:
                 conn.commit()
             except Exception as error:
                 conn.rollback()
-                print(f"⚠️ Ошибка при передаче трейда #{trade_id}: {error}")
                 db.log_admin(0, "trade_error", f"{trade_id}: {error}")
+                print(f"Ошибка при передаче трейда #{trade_id}: {error}")
                 return await safe_answer(
                     query,
                     "⚠️ Ошибка при выполнении трейда. Обратитесь к админам.",
