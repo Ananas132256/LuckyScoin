@@ -22,10 +22,10 @@ class MaintenanceMiddleware(BaseMiddleware):
             # При ошибке базы данных не пропускаем пользователя и не прерываем middleware.
             print(f"⚠️ Middleware: ошибка проверки админа {error}")
 
-        # Пропускаем /start — чтобы юзер знал про техперерыв
+        # /start остаётся доступен, чтобы пользователи могли получить сообщение о техперерыве.
         if isinstance(event, Message):
             text = event.text or ""
-            if text.startswith("/start") or text.startswith("/admin"):
+            if text.startswith("/start"):
                 return await handler(event, data)
 
         # Проверяем техперерыв

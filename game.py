@@ -155,7 +155,7 @@ class Game:
         {
             "symbol": "🌌", "name": "Галактика", "chance": 1,
             "currency": "lc", "amount": 500000,
-            "medal": "three_leaf_clover", "medal_chance": 0.10,
+            "medal": "four_leaf_clover", "medal_chance": 0.10,
         },
     )
 
