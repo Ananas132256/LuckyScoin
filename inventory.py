@@ -9,6 +9,10 @@ from cosmetics import (
     badge_slots_for_level, get_next_rarity, is_unlocked, describe_effect_dict,
 )
 
+# Включает/выключает отображение кнопки "⚒ Крафт" в инвентаре.
+# True — крафт доступен, False — кнопка скрыта.
+CRAFT_ENABLED = False
+
 
 async def safe_answer(query, *args, **kwargs):
     try:
@@ -26,9 +30,9 @@ class Inventory:
         dp.callback_query(F.data == "inv_sell")(self.cb_sell)
         dp.callback_query(F.data.startswith("inv_sell_confirm_"))(self.cb_sell_confirm)
         dp.callback_query(F.data.startswith("inv_sell_"))(self.cb_sell_item)
-        dp.callback_query(F.data == "inv_craft")(self.cb_craft)
-        dp.callback_query(F.data.startswith("inv_craft_confirm_"))(self.cb_craft_confirm)
-        dp.callback_query(F.data.startswith("inv_craft_"))(self.cb_craft_item)
+        # dp.callback_query(F.data == "inv_craft")(self.cb_craft)
+        # dp.callback_query(F.data.startswith("inv_craft_"))(self.cb_craft_item)
+        # dp.callback_query(F.data.startswith("inv_craft_confirm_"))(self.cb_craft_confirm)
         dp.callback_query(F.data == "inv_badges")(self.cb_badges)
         dp.callback_query(F.data == "inv_titles")(self.cb_titles)
         dp.callback_query(F.data.startswith("inv_slot_"))(self.cb_slot)
@@ -177,9 +181,10 @@ class Inventory:
                     text="💰 Продать значки", callback_data="inv_sell"
                 )]
             )
-            sections.append(
-                [InlineKeyboardButton(text="⚒ Крафт", callback_data="inv_craft")]
-            )
+            if CRAFT_ENABLED:
+                sections.append(
+                    [InlineKeyboardButton(text="⚒ Крафт", callback_data="inv_craft")]
+                )
         if TITLES:
             sections.append(
                 [InlineKeyboardButton(text="🏷 Титулы", callback_data="inv_titles")]
@@ -316,6 +321,9 @@ class Inventory:
             await safe_answer(query, "Не удалось продать значок.", show_alert=True)
 
     async def cb_craft(self, query: CallbackQuery, notice=None):
+        if not CRAFT_ENABLED:
+            return await safe_answer(query, "⚒ Крафт временно отключён.", show_alert=True)
+
         try:
             craftable = self._get_craftable_items(query.from_user.id)
             prefix = f"{notice}\n\n" if notice else ""

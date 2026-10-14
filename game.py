@@ -68,7 +68,7 @@ class Game:
     #  НАСТРОЙКИ
     # ============================================================
     LEVEL_REQ = {
-        "common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100,
+        "common": 0, "uncommon": 6, "rare": 15, "ultra": 50, "epic": 100,
         "advanced": 12,
     }
     STICKY_CHANCE = 0.15
@@ -144,17 +144,9 @@ class Game:
     MAX_TICKETS = 10
     ROULETTE_PRIZES = (
         {"symbol": "💰", "name": "Деньги", "chance": 35, "currency": "lc", "amount": 50},
-        {"symbol": "🎁", "name": "Подарок", "chance": 30, "currency": "lc", "amount": 100},
-        {"symbol": "🍀", "name": "Клевер", "chance": 20, "currency": "lc", "amount": 500},
-        {"symbol": "💎", "name": "Бриллиант", "chance": 10, "currency": "lc", "amount": 5000},
-        {
-            "symbol": "👑", "name": "Корона", "chance": 4, "currency": "lc",
-            "amount": 50000, "medal": "leaf", "medal_chance": 0.25,
-        },
-        {
-            "symbol": "🌌", "name": "Космос", "chance": 1, "currency": "lc",
-            "amount": 500000, "medal": "four_leaf_clover", "medal_chance": 0.10,
-        },
+        {"symbol": "🎁", "name": "Подарок", "chance": 15, "currency": "lc", "amount": 100},
+        {"symbol": "🍀", "name": "Клевер", "chance": 10, "currency": "lc", "amount": 500},
+        {"symbol": "💎", "name": "Бриллиант", "chance": 7, "currency": "lc", "amount": 5000},
     )
 
     def __init__(self, brain):
@@ -1048,24 +1040,13 @@ class Game:
     def _roulette_keyboard(self):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🎰 Крутить ещё (1 билет)", callback_data="roulette_spin"
+                text="🎰 Крутить (1 билет)", callback_data="roulette_spin"
             )],
             [InlineKeyboardButton(
                 text="🛒 Купить билет (5 SC)", callback_data="roulette_buy"
             )],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="play")],
         ])
-
-    @staticmethod
-    def _render_roulette_line(symbols: list, highlight_idx: int = -1) -> str:
-        """Подсвечивает символ рамками, не используя выравнивание пробелами."""
-        parts = []
-        for index, symbol in enumerate(symbols):
-            if index == highlight_idx:
-                parts.append(f"<b>[{symbol}]</b>")
-            else:
-                parts.append(symbol)
-        return " | ".join(parts)
 
     async def cb_roulette(self, query: CallbackQuery, state: FSMContext):
         try:
@@ -1137,68 +1118,62 @@ class Game:
                 and random.random() < prize["medal_chance"]
             )
             symbols = [entry["symbol"] for entry in self.ROULETTE_PRIZES]
-            winning_idx = random.randrange(5)
-            slots = [random.choice(symbols) for _ in range(5)]
-            slots[winning_idx] = prize["symbol"]
+            slots = [random.choice(symbols) for _ in range(4)] + [prize["symbol"]]
             await self._safe_answer(query)
             await self._anim_roulette(
-                query.message, user_id, prize, slots, medal_won, winning_idx
+                query.message, user_id, prize, slots, medal_won
             )
         except Exception as error:
             print(f"⚠️ Ошибка крутки рулетки: {error}")
             await self._safe_answer(query, "Не удалось выполнить крутку.", show_alert=True)
 
-    async def _anim_roulette(
-        self, message, user_id, prize, slots, medal_won, winning_idx
-    ):
-        """Подсвечивает слоты, затем показывает выбранный приз без стрелок."""
-        neutral_line = self._render_roulette_line(slots)
-        for frame, position in enumerate((-1, 0, 1, 2, 3)):
+    async def _anim_roulette(self, message, user_id, prize, slots, medal_won):
+        """Показывает не более пяти кадров, с паузой 1,1 секунды."""
+        for frame, position in enumerate((0, 1, 2, 3, 4)):
             if frame:
                 await asyncio.sleep(1.1)
+            arrow = "   ".join(
+                "▼" if index == position else "　"
+                for index in range(len(slots))
+            )
             text = (
-                "🎟 <b>Билетная рулетка</b>\n"
-                f"🎫 Билетиков: <b>"
-                f"{self.brain.db.get_tickets(user_id)}/{self.MAX_TICKETS}</b>\n\n"
-                f"{neutral_line if position == -1 else self._render_roulette_line(slots, position)}\n\n"
+                "🎟 <b>Билетная рулетка</b>\n\n"
+                f"<code>{arrow}</code>\n"
+                f"{' | '.join(slots)}\n\n"
                 f"<i>Крутим... {frame + 1}/5</i>"
             )
+
+            if frame == 4:
+                self.brain.db.add_balance(
+                    user_id, prize["currency"], prize["amount"]
+                )
+                result_line = (
+                    f"🎉 Выпало: <b>{prize['symbol']} {prize['name']}</b>\n"
+                    f"💰 Приз: <b>+{prize['amount']} {prize['currency'].upper()}</b>\n"
+                    f"🎫 Осталось билетиков: "
+                    f"<b>{self.brain.db.get_tickets(user_id)}/{self.MAX_TICKETS}</b>"
+                )
+                if medal_won:
+                    from cosmetics import BADGES
+
+                    badge = BADGES[prize["medal"]]
+                    self.brain.db.add_item(user_id, badge["shop_id"])
+                    result_line += (
+                        f"\n🎖 Дополнительно получена медаль: "
+                        f"<b>{badge['name']}</b>"
+                    )
+                text = (
+                    "🎟 <b>Билетная рулетка</b>\n\n"
+                    f"<code>{arrow}</code>\n"
+                    f"{' | '.join(slots)}\n\n"
+                    f"{result_line}"
+                )
+
             await self._safe_edit(
                 message, text,
                 reply_markup=self._roulette_keyboard(),
                 parse_mode="HTML",
             )
-
-        await asyncio.sleep(1.1)
-        self.brain.db.add_balance(
-            user_id, prize["currency"], prize["amount"]
-        )
-        result_line = (
-            f"🎉 Выпало: <b>{prize['symbol']} {prize['name']}</b>\n"
-            f"💵 Приз: <b>+{prize['amount']} "
-            f"{prize['currency'].upper()}</b>"
-        )
-        if medal_won:
-            from cosmetics import BADGES
-
-            badge = BADGES[prize["medal"]]
-            self.brain.db.add_item(user_id, badge["shop_id"])
-            result_line += (
-                f"\n🎖 Дополнительно получена медаль: "
-                f"<b>{badge['name']}</b>"
-            )
-        final_text = (
-            "🎟 <b>Билетная рулетка</b>\n"
-            f"🎫 Билетиков: <b>"
-            f"{self.brain.db.get_tickets(user_id)}/{self.MAX_TICKETS}</b>\n\n"
-            f"{self._render_roulette_line(slots, winning_idx)}\n\n"
-            f"{result_line}"
-        )
-        await self._safe_edit(
-            message, final_text,
-            reply_markup=self._roulette_keyboard(),
-            parse_mode="HTML",
-        )
 
     async def cb_exchange(self, query: CallbackQuery):
         user_id = query.from_user.id
