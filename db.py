@@ -173,6 +173,16 @@ class DB:
                 PRIMARY KEY (user_id, slot)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_badge_slot_state (
+                user_id INTEGER,
+                slot INTEGER,
+                badge_id TEXT,
+                hp INTEGER NOT NULL,
+                roll_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, slot)
+            )
+        """)
 
         # ============ АДМИНЫ ============
         self.conn.execute("""
@@ -391,6 +401,10 @@ class DB:
             if badge_id not in current_badge_ids:
                 self.conn.execute(
                     "DELETE FROM user_badges WHERE badge_id=?", (badge_id,)
+                )
+                self.conn.execute(
+                    "DELETE FROM user_badge_slot_state WHERE badge_id=?",
+                    (badge_id,),
                 )
         item_id_placeholders = ",".join("?" for _ in current_cosmetic_item_ids)
         self.conn.execute(
@@ -1335,6 +1349,10 @@ class DB:
                     )
 
             self.conn.execute(
+                "DELETE FROM user_badge_slot_state WHERE user_id=? AND badge_id=?",
+                (from_id, badge_id),
+            )
+            self.conn.execute(
                 "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, 1) "
                 "ON CONFLICT(user_id, item_id) "
                 "DO UPDATE SET quantity=quantity+1",
@@ -1386,14 +1404,32 @@ class DB:
         hp = badge.get("hp", 1) if badge else 1
         if hp == "inf":
             hp = -1
+        roll_count = 0
+        current = self.conn.execute(
+            "SELECT badge_id FROM user_badges WHERE user_id=? AND slot=?",
+            (user_id, slot),
+        ).fetchone()
+        saved_state = self.conn.execute(
+            "SELECT badge_id, hp, roll_count FROM user_badge_slot_state "
+            "WHERE user_id=? AND slot=?",
+            (user_id, slot),
+        ).fetchone()
+        if current is None and saved_state and saved_state[0] == badge_id:
+            _, hp, roll_count = saved_state
         self.conn.execute(
             "INSERT INTO user_badges (user_id, slot, badge_id, hp, roll_count) "
-            "VALUES (?, ?, ?, ?, 0) "
+            "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(user_id, slot) DO UPDATE SET "
             "roll_count=CASE WHEN badge_id != excluded.badge_id "
             "THEN 0 ELSE roll_count END, "
-            "badge_id=excluded.badge_id, hp=excluded.hp",
-            (user_id, slot, badge_id, hp)
+            "badge_id=excluded.badge_id, "
+            "hp=CASE WHEN badge_id != excluded.badge_id "
+            "THEN excluded.hp ELSE hp END",
+            (user_id, slot, badge_id, hp, roll_count)
+        )
+        self.conn.execute(
+            "DELETE FROM user_badge_slot_state WHERE user_id=? AND slot=?",
+            (user_id, slot),
         )
         self.conn.commit()
 
@@ -1426,7 +1462,27 @@ class DB:
         )
         self.conn.commit()
 
-    def remove_user_badge(self, user_id, slot):
+    def remove_user_badge(self, user_id, slot, preserve_state=True):
+        badge = self.conn.execute(
+            "SELECT badge_id, hp, roll_count FROM user_badges "
+            "WHERE user_id=? AND slot=?",
+            (user_id, slot),
+        ).fetchone()
+        if badge and preserve_state:
+            self.conn.execute(
+                "INSERT INTO user_badge_slot_state "
+                "(user_id, slot, badge_id, hp, roll_count) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, slot) DO UPDATE SET "
+                "badge_id=excluded.badge_id, hp=excluded.hp, "
+                "roll_count=excluded.roll_count",
+                (user_id, slot, *badge),
+            )
+        elif not preserve_state:
+            self.conn.execute(
+                "DELETE FROM user_badge_slot_state WHERE user_id=? AND slot=?",
+                (user_id, slot),
+            )
         self.conn.execute(
             "DELETE FROM user_badges WHERE user_id=? AND slot=?",
             (user_id, slot)

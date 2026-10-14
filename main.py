@@ -2,7 +2,7 @@ import asyncio
 import os
 from brain import Brain
 
-TOKEN = "8821292537:AAE8Vs7WLwqeVJq1h1jEMmocJ58C4_iXtuY"
+TOKEN = os.environ.get("BOT_TOKEN")
 
 
 async def main():

@@ -493,6 +493,9 @@ class Admin:
 
         if parts[2].lower() == "all":
             self.brain.db.conn.execute("DELETE FROM user_badges WHERE user_id=?", (target_id,))
+            self.brain.db.conn.execute(
+                "DELETE FROM user_badge_slot_state WHERE user_id=?", (target_id,)
+            )
             self.brain.db.conn.commit()
             return await message.answer(
                 f"✅ Все значки сняты у <code>{target_id}</code>",
@@ -532,6 +535,7 @@ class Admin:
             return
         self._log(message)
         self.brain.db.conn.execute("DELETE FROM user_badges")
+        self.brain.db.conn.execute("DELETE FROM user_badge_slot_state")
         self.brain.db.conn.commit()
         await message.answer("✅ Все медали у всех игроков удалены.")
 

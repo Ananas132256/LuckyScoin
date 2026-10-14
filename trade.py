@@ -353,6 +353,11 @@ class Trade:
                             "DELETE FROM user_badges WHERE user_id=? AND slot=?",
                             (sender, equipped_row[0]),
                         )
+                    conn.execute(
+                        "DELETE FROM user_badge_slot_state "
+                        "WHERE user_id=? AND badge_id=?",
+                        (sender, badge_id),
+                    )
                     if quantity_row and quantity_row[0] > 0:
                         quantity = quantity_row[0] - 1
                         if quantity:
