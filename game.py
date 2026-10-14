@@ -144,9 +144,19 @@ class Game:
     MAX_TICKETS = 10
     ROULETTE_PRIZES = (
         {"symbol": "💰", "name": "Деньги", "chance": 35, "currency": "lc", "amount": 50},
-        {"symbol": "🎁", "name": "Подарок", "chance": 15, "currency": "lc", "amount": 100},
-        {"symbol": "🍀", "name": "Клевер", "chance": 10, "currency": "lc", "amount": 500},
-        {"symbol": "💎", "name": "Бриллиант", "chance": 7, "currency": "lc", "amount": 5000},
+        {"symbol": "🎁", "name": "Подарок", "chance": 30, "currency": "lc", "amount": 100},
+        {"symbol": "🍀", "name": "Клевер", "chance": 20, "currency": "lc", "amount": 500},
+        {"symbol": "💎", "name": "Бриллиант", "chance": 10, "currency": "lc", "amount": 5000},
+        {
+            "symbol": "👑", "name": "Корона", "chance": 4,
+            "currency": "lc", "amount": 50000,
+            "medal": "leaf", "medal_chance": 0.25,
+        },
+        {
+            "symbol": "🌌", "name": "Галактика", "chance": 1,
+            "currency": "lc", "amount": 500000,
+            "medal": "three_leaf_clover", "medal_chance": 0.10,
+        },
     )
 
     def __init__(self, brain):
@@ -1052,9 +1062,10 @@ class Game:
     @classmethod
     def _pick_roulette_result(cls):
         """Выбирает приз согласно заданным процентным шансам."""
+        prizes = [prize for prize in cls.ROULETTE_PRIZES if prize["chance"] > 0]
         return random.choices(
-            cls.ROULETTE_PRIZES,
-            weights=[prize["chance"] for prize in cls.ROULETTE_PRIZES],
+            prizes,
+            weights=[prize["chance"] for prize in prizes],
             k=1,
         )[0]
 
@@ -1073,13 +1084,25 @@ class Game:
         try:
             await state.clear()
             tickets = self.brain.db.get_tickets(query.from_user.id)
+            from cosmetics import BADGES
+
+            prize_lines = []
+            for prize in self.ROULETTE_PRIZES:
+                amount = f"{prize['amount']:,}".replace(",", " ")
+                line = (
+                    f"{prize['symbol']} {prize['name']} — {prize['chance']}%: "
+                    f"+{amount} {prize['currency'].upper()}"
+                )
+                if "medal" in prize and "medal_chance" in prize:
+                    medal = BADGES[prize["medal"]]
+                    medal_chance = f"{prize['medal_chance'] * 100:g}%"
+                    line += f" · {medal_chance} шанс на {medal['name']}"
+                prize_lines.append(line)
             text = (
                 "🎟 <b>Билетная рулетка</b>\n\n"
                 f"🎫 Билетиков: <b>{tickets}/{self.MAX_TICKETS}</b>\n"
-                "💰 35%: +50 LC · 🎁 30%: +100 SC\n"
-                "🍀 20%: +500 LC · 💎 10%: +5 000 LC\n"
-                "👑 4%: +50 000 LC, шанс 25% на 🍃 медаль\n"
-                "🌌 1%: +500 000 LC, шанс 10% на 🍀 медаль\n\n"
+                + "\n".join(prize_lines)
+                + "\n\n"
                 "🎰 Выбери действие:"
             )
             await self._safe_edit(

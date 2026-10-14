@@ -66,6 +66,7 @@ ITEMS = {
         "desc": "Осколок сломанного D6. +3% удачи, навсегда.",
         "rarity": "common",
         "price_sc": 0,
+        "hidden": True,
         "hp": "inf",
         "break_on": [],
         "break_chance": 0,

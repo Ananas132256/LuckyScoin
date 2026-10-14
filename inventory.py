@@ -60,7 +60,10 @@ class Inventory:
         result.update(
             bid
             for bid, badge in BADGES.items()
-            if not badge.get("price_sc") and is_unlocked(badge, u, room_level)
+            # Only non-hidden badges may be granted by the free-unlock rule.
+            if not badge.get("hidden")
+            and not badge.get("price_sc")
+            and is_unlocked(badge, u, room_level)
         )
         equipped = self.brain.db.get_user_badges(user_id)
         result.update(
