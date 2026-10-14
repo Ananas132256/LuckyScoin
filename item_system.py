@@ -186,6 +186,8 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if not badge:
         return None
     brain.db.remove_user_badge(user_id, slot, preserve_state=False)
+    if badge.get("shop_id"):
+        brain.db.remove_item(user_id, badge["shop_id"], 1)
     after = badge.get("after_break", {"type": "NOTHING"})
     t = after.get("type", "NOTHING")
     if t == "NOTHING":

@@ -6,7 +6,7 @@ import asyncio
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from cosmetics import BADGES
+from cosmetics import BADGES, badge_slots_for_level
 
 
 # ============================================================
@@ -426,6 +426,7 @@ class Admin:
     # ================= МЕДАЛИ =================
 
     async def cmd_givebadge(self, message: Message):
+        """Give a badge, equipping it only in an unlocked slot when available."""
         if not self._check(message):
             return
         parts = message.text.split()
@@ -458,9 +459,11 @@ class Admin:
 
         self.brain.db.add_item(target_id, shop_id, 1)
 
+        user_level = self.brain.db.get_user(target_id)["level"]
+        unlocked_slots = badge_slots_for_level(user_level)
         equipped = self.brain.db.get_user_badges(target_id)
         free_slot = None
-        for i in range(5):
+        for i in range(unlocked_slots):
             if not equipped.get(i):
                 free_slot = i
                 break
@@ -469,7 +472,10 @@ class Admin:
             self.brain.db.set_user_badge(target_id, free_slot, badge_id)
             result = f"и надета в слот <b>{free_slot + 1}</b>"
         else:
-            result = "добавлена в инвентарь (все слоты заняты)"
+            result = (
+                "добавлена в инвентарь "
+                f"(все открытые слоты заполнены: {unlocked_slots}/{unlocked_slots})"
+            )
         await message.answer(
             f"✅ Медаль <b>{badge['name']}</b> выдана юзеру "
             f"<code>{target_id}</code> {result}.",
