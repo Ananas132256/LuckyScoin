@@ -255,53 +255,151 @@ class Trade:
             if query.from_user.id != trade["to_id"]:
                 return await safe_answer(query, "Это не твоё предложение.", show_alert=True)
 
-            # Сразу блокируем повторное принятие одного предложения.
-            del self.pending[trade_id]
             from_id = trade["from_id"]
             to_id = trade["to_id"]
             give = trade["give"]
             want = trade["want"]
             fee = self._fee_for(want)
+            db = self.brain.db
+            conn = db.conn
+            from cosmetics import BADGES
 
-            if give["type"] == "sc":
-                if self.brain.db.get_balance(from_id, "sc") < give["amount"]:
-                    return await safe_answer(
-                        query, "У отправителя уже нет столько SC.", show_alert=True
+            try:
+                # Блокируем записи, повторно проверяем активы и выполняем трейд атомарно.
+                conn.execute("BEGIN IMMEDIATE")
+
+                if give["type"] == "sc":
+                    row = conn.execute(
+                        "SELECT sc FROM users WHERE user_id=?", (from_id,)
+                    ).fetchone()
+                    if not row or row[0] < give["amount"]:
+                        conn.rollback()
+                        return await safe_answer(
+                            query, "У отправителя уже нет столько SC.", show_alert=True
+                        )
+                if want["type"] == "sc":
+                    required = want["amount"] + fee
+                    row = conn.execute(
+                        "SELECT sc FROM users WHERE user_id=?", (to_id,)
+                    ).fetchone()
+                    if not row or row[0] < required:
+                        conn.rollback()
+                        return await safe_answer(
+                            query, f"Нужно {required} SC (включая комиссию).",
+                            show_alert=True,
+                        )
+
+                badge_transfers = []
+                if give["type"] == "badge":
+                    badge_transfers.append((from_id, to_id, give["badge_id"]))
+                if want["type"] == "badge":
+                    badge_transfers.append((to_id, from_id, want["badge_id"]))
+
+                # Проверяем медали и их shop_id до любых изменений баланса или инвентаря.
+                badge_shop_ids = {}
+                for sender, _, badge_id in badge_transfers:
+                    badge = BADGES.get(badge_id)
+                    shop_id = badge.get("shop_id") if badge else None
+                    if not shop_id:
+                        conn.rollback()
+                        return await safe_answer(
+                            query, "У медали отсутствует товар в инвентаре.",
+                            show_alert=True,
+                        )
+                    badge_shop_ids[badge_id] = shop_id
+                    quantity_row = conn.execute(
+                        "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
+                        (sender, shop_id),
+                    ).fetchone()
+                    equipped_row = conn.execute(
+                        "SELECT slot FROM user_badges "
+                        "WHERE user_id=? AND badge_id=? ORDER BY slot LIMIT 1",
+                        (sender, badge_id),
+                    ).fetchone()
+                    if (not quantity_row or quantity_row[0] < 1) and not equipped_row:
+                        conn.rollback()
+                        message = (
+                            "У отправителя больше нет этой медали."
+                            if sender == from_id
+                            else "У тебя больше нет этой медали."
+                        )
+                        return await safe_answer(query, message, show_alert=True)
+
+                # Сначала списываем валюту и медали.
+                if give["type"] == "sc":
+                    conn.execute(
+                        "UPDATE users SET sc=sc-? WHERE user_id=?",
+                        (give["amount"], from_id),
                     )
-            elif not self._owns_badge(from_id, give["badge_id"]):
+                if want["type"] == "sc":
+                    conn.execute(
+                        "UPDATE users SET sc=sc-? WHERE user_id=?",
+                        (want["amount"] + fee, to_id),
+                    )
+
+                for sender, _, badge_id in badge_transfers:
+                    shop_id = badge_shop_ids[badge_id]
+                    equipped_row = conn.execute(
+                        "SELECT slot FROM user_badges "
+                        "WHERE user_id=? AND badge_id=? ORDER BY slot LIMIT 1",
+                        (sender, badge_id),
+                    ).fetchone()
+                    quantity_row = conn.execute(
+                        "SELECT quantity FROM inventory WHERE user_id=? AND item_id=?",
+                        (sender, shop_id),
+                    ).fetchone()
+                    if equipped_row:
+                        conn.execute(
+                            "DELETE FROM user_badges WHERE user_id=? AND slot=?",
+                            (sender, equipped_row[0]),
+                        )
+                    if quantity_row and quantity_row[0] > 0:
+                        quantity = quantity_row[0] - 1
+                        if quantity:
+                            conn.execute(
+                                "UPDATE inventory SET quantity=? "
+                                "WHERE user_id=? AND item_id=?",
+                                (quantity, sender, shop_id),
+                            )
+                        else:
+                            conn.execute(
+                                "DELETE FROM inventory WHERE user_id=? AND item_id=?",
+                                (sender, shop_id),
+                            )
+
+                # Затем начисляем валюту и медали получателям.
+                if give["type"] == "sc":
+                    conn.execute(
+                        "UPDATE users SET sc=sc+? WHERE user_id=?",
+                        (give["amount"], to_id),
+                    )
+                if want["type"] == "sc":
+                    conn.execute(
+                        "UPDATE users SET sc=sc+? WHERE user_id=?",
+                        (want["amount"], from_id),
+                    )
+
+                for sender, recipient, badge_id in badge_transfers:
+                    shop_id = badge_shop_ids[badge_id]
+                    conn.execute(
+                        "INSERT INTO inventory (user_id, item_id, quantity) "
+                        "VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) "
+                        "DO UPDATE SET quantity=quantity+1",
+                        (recipient, shop_id),
+                    )
+                conn.commit()
+            except Exception as error:
+                conn.rollback()
+                print(f"⚠️ Ошибка при передаче трейда #{trade_id}: {error}")
+                db.log_admin(0, "trade_error", f"{trade_id}: {error}")
                 return await safe_answer(
-                    query, "У отправителя больше нет этой медали.", show_alert=True
+                    query,
+                    "⚠️ Ошибка при выполнении трейда. Обратитесь к админам.",
+                    show_alert=True,
                 )
 
-            if want["type"] == "sc":
-                required = want["amount"] + fee
-                if self.brain.db.get_balance(to_id, "sc") < required:
-                    return await safe_answer(
-                        query, f"Нужно {required} SC (включая комиссию).",
-                        show_alert=True,
-                    )
-            elif not self._owns_badge(to_id, want["badge_id"]):
-                return await safe_answer(
-                    query, "У тебя больше нет этой медали.", show_alert=True
-                )
-
-            badge_transfers = []
-            if give["type"] == "badge":
-                badge_transfers.append((from_id, to_id, give["badge_id"]))
-            if want["type"] == "badge":
-                badge_transfers.append((to_id, from_id, want["badge_id"]))
-            for sender, recipient, badge_id in badge_transfers:
-                if not self.brain.db.transfer_badge(sender, recipient, badge_id):
-                    return await safe_answer(
-                        query, "Не удалось передать медаль.", show_alert=True
-                    )
-
-            if give["type"] == "sc":
-                self.brain.db.add_balance(from_id, "sc", -give["amount"])
-                self.brain.db.add_balance(to_id, "sc", give["amount"])
-            if want["type"] == "sc":
-                self.brain.db.add_balance(to_id, "sc", -(want["amount"] + fee))
-                self.brain.db.add_balance(from_id, "sc", want["amount"])
+            # Удаляем предложение только после успешной фиксации всех передач.
+            del self.pending[trade_id]
 
             try:
                 await query.message.edit_text(
