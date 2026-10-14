@@ -1369,6 +1369,15 @@ class DB:
             }
         return result
 
+    def is_badge_equipped_elsewhere(self, user_id, slot, badge_id):
+        """Проверяет, надета ли такая же медаль в другом слоте."""
+        cur = self.conn.execute(
+            "SELECT 1 FROM user_badges "
+            "WHERE user_id=? AND badge_id=? AND slot<>? LIMIT 1",
+            (user_id, badge_id, slot),
+        )
+        return cur.fetchone() is not None
+
     def set_user_badge(self, user_id, slot, badge_id):
         from cosmetics import BADGES
         badge = BADGES.get(badge_id)

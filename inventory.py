@@ -517,86 +517,118 @@ class Inventory:
     async def cb_slot(self, query: CallbackQuery):
         try:
             slot = int(query.data.replace("inv_slot_", ""))
-        except ValueError:
-            return await query.answer("Ошибка", show_alert=True)
+            user_id = query.from_user.id
+            u, room_level = self._ctx(user_id)
+            if slot < 0 or slot >= badge_slots_for_level(u["level"]):
+                await safe_answer(query, "Ячейка заблокирована", show_alert=True)
+                return
 
-        user_id = query.from_user.id
-        u, room_level = self._ctx(user_id)
-        if slot >= badge_slots_for_level(u["level"]):
-            return await query.answer("Ячейка заблокирована", show_alert=True)
+            owned = self._owned_badges(u, room_level)
+            equipped = self.brain.db.get_user_badges_full(user_id)
+            if not owned:
+                await safe_answer(query, "Нет доступных медалей", show_alert=True)
+                return
 
-        owned = self._owned_badges(u, room_level)
-        equipped = self.brain.db.get_user_badges_full(user_id)
+            buttons = []
+            current_bid = equipped.get(slot, {}).get("badge_id")
+            for bid in owned:
+                badge = BADGES[bid]
+                rarity = RARITY_EMOJI.get(badge["rarity"], "⚪")
+                hp = badge.get("hp", "inf")
+                hp_str = "∞" if hp == "inf" else str(hp)
+                other_slots = [
+                    other_slot
+                    for other_slot, info in equipped.items()
+                    if other_slot != slot and info["badge_id"] == bid
+                ]
+                if other_slots:
+                    other_slot = min(other_slots)
+                    label = f"🔒 {badge['name']} [слот {other_slot + 1}]"
+                elif current_bid == bid:
+                    label = f"✅ {badge['name']} [слот {slot + 1}]"
+                else:
+                    label = f"{rarity} {badge['name']} [{hp_str}]"
+                buttons.append([InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"inv_badge_pick_{slot}_{bid}"
+                )])
 
-        if not owned:
-            return await query.answer("Нет доступных медалей", show_alert=True)
-
-        buttons = []
-        current_bid = equipped.get(slot, {}).get("badge_id")
-        for bid in owned:
-            b = BADGES[bid]
-            mark = " ✅" if current_bid == bid else ""
-            r = RARITY_EMOJI.get(b["rarity"], "⚪")
-            # HP
-            hp = b.get("hp", "inf")
-            hp_str = "∞" if hp == "inf" else str(hp)
+            if current_bid:
+                buttons.append([InlineKeyboardButton(
+                    text="❌ Снять медаль",
+                    callback_data=f"inv_badge_remove_{slot}"
+                )])
             buttons.append([InlineKeyboardButton(
-                text=f"{r} {b['name']} [{hp_str}] {mark}",
-                callback_data=f"inv_badge_pick_{slot}_{bid}"
+                text="⬅️ Назад", callback_data="inv_badges"
             )])
 
-        if current_bid:
-            buttons.append([InlineKeyboardButton(
-                text="❌ Снять медаль",
-                callback_data=f"inv_badge_remove_{slot}"
-            )])
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="inv_badges")])
-
-        # Описание выбранной медали (если есть)
-        info_text = f"🏅 <b>Ячейка {slot + 1}</b>\n\n"
-        if current_bid and current_bid in BADGES:
-            badge = BADGES[current_bid]
-            eff = self._describe_badge_effect(badge, user_id)
-            info_text += (
-                f"Сейчас: <b>{badge['name']}</b>\n"
-                f"<i>{badge.get('desc', '')}</i>\n"
-                f"Эффект: <i>{eff}</i>\n\n"
-            )
-        info_text += f"Доступно значков: <b>{len(owned)}</b>\n"
-        info_text += "<i>Нажми, чтобы надеть. HP = сколько спинов проживёт.</i>"
-
-        try:
+            info_text = f"🏅 <b>Ячейка {slot + 1}</b>\n\n"
+            if current_bid and current_bid in BADGES:
+                badge = BADGES[current_bid]
+                effect = self._describe_badge_effect(badge, user_id)
+                info_text += (
+                    f"Сейчас: <b>{badge['name']}</b>\n"
+                    f"<i>{badge.get('desc', '')}</i>\n"
+                    f"Эффект: <i>{effect}</i>\n\n"
+                )
+            info_text += f"Доступно значков: <b>{len(owned)}</b>\n"
+            info_text += "<i>Нажми, чтобы надеть. HP = сколько спинов проживёт.</i>"
             await query.message.edit_text(
                 info_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode="HTML"
+                parse_mode="HTML",
             )
-        except Exception:
-            pass
-        await query.answer()
+            await safe_answer(query)
+        except ValueError:
+            await safe_answer(query, "Ошибка", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка открытия ячейки медали: {error}")
+            await safe_answer(query, "Не удалось открыть ячейку.", show_alert=True)
 
     async def cb_badge_pick(self, query: CallbackQuery):
-        # inv_badge_pick_{slot}_{badge_id}
-        parts = query.data.split("_", 4)
-        if len(parts) != 5:
-            return await query.answer("Ошибка", show_alert=True)
         try:
+            # inv_badge_pick_{slot}_{badge_id}
+            parts = query.data.split("_", 4)
+            if len(parts) != 5:
+                await safe_answer(query, "Ошибка", show_alert=True)
+                return
             slot = int(parts[3])
+            bid = parts[4]
+            user_id = query.from_user.id
+            if slot < 0 or slot >= 5:
+                await safe_answer(query, "Ячейка не найдена.", show_alert=True)
+                return
+            if bid not in BADGES:
+                await safe_answer(query, "Значок не найден", show_alert=True)
+                return
+            u, room_level = self._ctx(user_id)
+            if bid not in self._owned_badges(u, room_level):
+                await safe_answer(query, "Значок ещё не открыт", show_alert=True)
+                return
+
+            if self.brain.db.is_badge_equipped_elsewhere(user_id, slot, bid):
+                equipped = self.brain.db.get_user_badges_full(user_id)
+                other_slot = next(
+                    current_slot
+                    for current_slot, info in equipped.items()
+                    if current_slot != slot and info["badge_id"] == bid
+                )
+                await safe_answer(
+                    query,
+                    f"❌ Уже надето в слоте {other_slot + 1}",
+                    show_alert=True,
+                )
+                return
+
+            self.brain.db.set_user_badge(user_id, slot, bid)
+            await safe_answer(query, f"✅ Надето: {BADGES[bid]['name']}")
+            query.data = f"inv_slot_{slot}"
+            await self.cb_slot(query)
         except ValueError:
-            return await query.answer("Ошибка", show_alert=True)
-        bid = parts[4]
-
-        user_id = query.from_user.id
-        if bid not in BADGES:
-            return await query.answer("Значок не найден", show_alert=True)
-        u, room_level = self._ctx(user_id)
-        if bid not in self._owned_badges(u, room_level):
-            return await query.answer("Значок ещё не открыт", show_alert=True)
-
-        self.brain.db.set_user_badge(user_id, slot, bid)
-        await query.answer(f"✅ Надето: {BADGES[bid]['name']}")
-        query.data = f"inv_slot_{slot}"
-        await self.cb_slot(query)
+            await safe_answer(query, "Ошибка", show_alert=True)
+        except Exception as error:
+            print(f"⚠️ Ошибка надевания медали: {error}")
+            await safe_answer(query, "Не удалось надеть значок.", show_alert=True)
 
     async def cb_badge_remove(self, query: CallbackQuery):
         try:
