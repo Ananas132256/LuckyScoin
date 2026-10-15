@@ -758,50 +758,6 @@ class DB:
         )
         return cur.fetchall()
 
-    def get_user_rank(self, user_id, field):
-        allowed = {"sc", "lc", "level", "wins", "games"}
-        if field not in allowed:
-            field = "sc"
-
-        row = self.conn.execute(
-            f"SELECT {field} FROM users WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-        if row is None:
-            return None, 0, 0
-        value = row[0] or 0
-        above = self.conn.execute(
-            f"SELECT COUNT(*) FROM users WHERE {field} > ?",
-            (value,)
-        ).fetchone()[0]
-        total = self.conn.execute(
-            "SELECT COUNT(*) FROM users"
-        ).fetchone()[0]
-        return above + 1, value, total
-
-    def get_user_rank_winrate(self, user_id, min_games=10):
-        row = self.conn.execute(
-            "SELECT wins, games FROM users WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-        if not row:
-            return None
-        wins, games = row[0] or 0, row[1] or 0
-        if games < min_games:
-            return None
-
-        winrate = wins * 100.0 / games
-        above = self.conn.execute(
-            "SELECT COUNT(*) FROM users "
-            "WHERE games >= ? AND (wins*100.0/games) > ?",
-            (min_games, winrate)
-        ).fetchone()[0]
-        total = self.conn.execute(
-            "SELECT COUNT(*) FROM users WHERE games >= ?",
-            (min_games,)
-        ).fetchone()[0]
-        return above + 1, round(winrate, 1), wins, games, total
-
     def get_bot_stats(self):
         cur = self.conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(sc),0), COALESCE(SUM(lc),0), COALESCE(SUM(games),0) "
