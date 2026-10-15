@@ -1,7 +1,8 @@
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from utils import safe_answer
+from utils import is_current_screen, nav_footer, safe_answer, with_hero
 import time
 
 
@@ -102,6 +103,14 @@ def _maint_line(brain) -> str:
 
 
 class Menu:
+    TOP_SORTS = {
+        "sc": ("💰 SC", "SC", " SC"),
+        "lc": ("🍀 LC", "LC", " LC"),
+        "level": ("⭐ Ур.", "уровню", " ур."),
+        "games": ("🎮 Игр", "играм", " игр"),
+        "winrate": ("📊 ВР", "винрейту", "%"),
+    }
+
     def __init__(self, brain):
         self.brain = brain
 
@@ -112,30 +121,40 @@ class Menu:
         dp.callback_query(F.data == "profile")(self.cb_profile)
         dp.callback_query(F.data == "top")(self.cb_top)
         dp.callback_query(F.data == "menu")(self.cb_menu)
+        dp.callback_query(F.data == "cele_done")(self.cb_cele_done)
         dp.callback_query(F.data == "about")(self.cb_about)
         dp.callback_query(F.data == "settings")(self.cb_settings)
         dp.callback_query(F.data == "set_layout_menu")(self.cb_layouts)
         dp.callback_query(F.data.startswith("set_layout_"))(self.cb_set_layout)
         dp.callback_query(F.data == "top_casinos")(self.cb_top_casinos)
-        dp.callback_query(F.data.in_({"top_sc", "top_lc", "top_level", "top_games", "top_winrate"}))(self.cb_top_sort)
+        dp.callback_query(
+            F.data.in_({f"top_{key}" for key in self.TOP_SORTS})
+        )(self.cb_top_sort)
 
     def main_keyboard(self, user_id):
+        from config import TYCOON_ENABLED
+
         layout_key = self.brain.db.get_layout(user_id)
         layout = LAYOUTS.get(layout_key, LAYOUTS["classic"])
+        labels = dict(BUTTONS)
+        if not TYCOON_ENABLED:
+            labels["casino"] = "🚧 Казино (ремонт)"
         buttons = []
         for row in layout["rows"]:
             line = []
             for key in row:
-                if key in BUTTONS:
-                    line.append(InlineKeyboardButton(text=BUTTONS[key], callback_data=key))
+                if key in labels:
+                    line.append(InlineKeyboardButton(text=labels[key], callback_data=key))
             if line:
                 buttons.append(line)
+        buttons.append(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     def settings_keyboard(self):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Раскладка кнопок", callback_data="set_layout_menu")],
             [InlineKeyboardButton(text="⬅️ Назад",            callback_data="menu")],
+            nav_footer(),
         ])
 
     def layout_keyboard(self, current):
@@ -144,14 +163,114 @@ class Menu:
             mark = " ✅" if key == current else ""
             buttons.append([InlineKeyboardButton(text=data["name"] + mark, callback_data=f"set_layout_{key}")])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")])
+        buttons.append(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    async def _show_celebration(self, message: Message):
+        """Send the one-time 1.0.0 welcome screen."""
+        from config import UPDATE_GIF_FILE_ID
+
+        user_id = message.from_user.id
+        caption = self.build_celebration_caption(user_id)
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🎰 Вернуться в меню",
+                callback_data="cele_done",
+            )
+        ]])
+        try:
+            await message.answer_animation(
+                animation=UPDATE_GIF_FILE_ID,
+                caption=caption,
+                reply_markup=kb,
+                parse_mode="HTML",
+            )
+        except Exception as error:
+            try:
+                print(f"⚠️ Celebration GIF failed: {error}")
+            except Exception:
+                pass
+            await message.answer(
+                caption, reply_markup=kb, parse_mode="HTML"
+            )
+
+    def build_celebration_caption(self, user_id: int) -> str:
+        """Return the HTML celebration caption for a given user."""
+        from config import UPDATE_VERSION
+
+        conv = self.brain.db.get_user_conversion_before(user_id)
+        caption = (
+            f"🎉 <b>LuckyScoin обновился до v{UPDATE_VERSION}!</b>\n\n"
+            "Мы вернулись, и у нас для тебя кое-что есть:\n"
+            "🎁 <b>Уникальный титул «Старичок»</b> — только 2 дня "
+            "в магазине, успей забрать!\n\n"
+        )
+        if conv and conv["lc_before"] > 0:
+            tiers = conv["tiers"]
+            rate_lines = []
+            for cap, rate in tiers:
+                rate_label = f"{rate:,}".replace(",", " ")
+                if cap is None:
+                    rate_lines.append(
+                        f"• свыше — {rate_label} LC = 1 SC"
+                    )
+                    break
+                rate_lines.append(
+                    f"• до {cap:,} LC — {rate_label} LC = 1 SC"
+                    .replace(",", " ")
+                )
+            caption += (
+                "💱 <b>Что случилось с твоими LC?</b>\n"
+                f"Было: <b>{conv['lc_before']:,} LC</b>"
+                .replace(",", " ") + "\n"
+                "Переведено по каскадному курсу:\n"
+                + "\n".join(rate_lines) + "\n"
+                f"Начислено: <b>+{conv['sc_gained']} SC</b>\n\n"
+                "<i>Мы сбрасываем экономику, чтобы дать всем равный "
+                "старт. Раньше LC было слишком много и они обесценились. "
+                "SC — стабильная валюта, ей инфляция не грозит.</i>\n\n"
+            )
+        caption += "Жми кнопку ниже, чтобы продолжить."
+        caption = caption.replace(",", " ")
+        return caption
+
+    def _menu_text(self, user_id):
+        """Return the HTML text for the main menu."""
+        from config import SEASON_DURATION_DAYS
+
+        user = self.brain.db.get_user(user_id)
+        body = "🎰 <b>LuckyScoin</b>\n\nВыбери действие:"
+        body += _maint_line(self.brain)
+        text = with_hero(body, user)
+
+        elapsed = self.brain.db.get_season_elapsed()
+        season_num = self.brain.db.get_current_season()
+        if elapsed > 0:
+            days_left = max(0, SEASON_DURATION_DAYS - elapsed // 86400)
+            text = (
+                f"🏁 <b>Сезон {season_num}</b> · "
+                f"осталось <b>{days_left} дн.</b>\n\n{text}"
+            )
+        return text
 
     async def cmd_start(self, message: Message):
         user_id = message.from_user.id
+        self.brain.db.record_daily_visit(user_id)
         username = message.from_user.username or message.from_user.first_name or "anon"
+        user = self.brain.db.get_user(user_id)
+        is_new_user = (
+            user["username"] is None
+            and user["total_bets"] == 0
+            and user["games"] == 0
+        )
         self.brain.db.set_username(user_id, username)
-        text = "Добро пожаловать в LuckyScoin 🎰\nВыбери действие:"
-        text += _maint_line(self.brain)
+        if is_new_user:
+            self.brain.db.log_event(user_id, username, "signup", "")
+        if not self.brain.db.has_seen_celebration(user_id):
+            await self._show_celebration(message)
+            return
+        text = self._menu_text(user_id)
         await message.answer(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
 
     async def cmd_version(self, message: Message):
@@ -165,29 +284,32 @@ class Menu:
     async def cb_menu(self, query: CallbackQuery):
         await safe_answer(query)
         user_id = query.from_user.id
+        self.brain.db.record_daily_visit(user_id)
         username = query.from_user.username or query.from_user.first_name or "anon"
         self.brain.db.set_username(user_id, username)
-        u = self.brain.db.get_user(user_id)
-        xp_needed = 100 * (u["level"] + 1)
-        filled = max(0, min(10, int(u["xp"] / xp_needed * 10)))
-        bar = "▰" * filled + "▱" * (10 - filled)
-        percent = int(u["xp"] / xp_needed * 100)
-        title = f"  •  🏷 {u['title']}" if u["title"] else ""
-        text = (
-            f"🎰 <b>LuckyScoin</b>\n\n"
-            f"👤 @{u['username']}{title}\n"
-            f"⭐ Ур. <b>{u['level']}</b>\n"
-            f"<code>{bar}</code> {percent}%\n"
-            f"XP: {u['xp']}/{xp_needed}\n\n"
-            f"💰 SC: <b>{u['sc']}</b>\n"
-            f"🍀 LC: <b>{u['lc']}</b>\n"
-            f"Выбери действие:"
-        )
-        text += _maint_line(self.brain)
+        if not self.brain.db.has_seen_celebration(user_id):
+            await self._show_celebration(query.message)
+            return
+        text = self._menu_text(user_id)
         try:
             await query.message.edit_text(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
         except Exception:
             pass
+
+    async def cb_cele_done(self, query: CallbackQuery):
+        await safe_answer(query)
+        user_id = query.from_user.id
+        self.brain.db.mark_celebration_seen(user_id)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        text = self._menu_text(user_id)
+        await query.message.answer(
+            text,
+            reply_markup=self.main_keyboard(user_id),
+            parse_mode="HTML",
+        )
 
     async def cb_about(self, query: CallbackQuery):
         await safe_answer(query)
@@ -204,6 +326,7 @@ class Menu:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎰 Играть", callback_data="play")],
             [InlineKeyboardButton(text="⬅️ Назад",  callback_data="menu")],
+            nav_footer(),
         ])
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML",
@@ -211,7 +334,11 @@ class Menu:
         except Exception:
             pass
 
-    async def cb_profile(self, query: CallbackQuery):
+    async def cb_profile(self, query: CallbackQuery, state: FSMContext = None):
+        if is_current_screen(query, "profile"):
+            return await safe_answer(query, "Уже здесь")
+        if state:
+            await state.clear()
         await safe_answer(query)
         user_id = query.from_user.id
         username = query.from_user.username or query.from_user.first_name or "anon"
@@ -259,23 +386,25 @@ class Menu:
             buttons.append([InlineKeyboardButton(text="🏢 Открыть казино", callback_data="casino")])
         buttons.append([InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inv")])
         buttons.append([InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")])
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад",     callback_data="menu")])
+        buttons.append(nav_footer("profile"))
         try:
             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
         except Exception:
             pass
 
     def _top_kb(self, sort_by):
-        def mark(x):
-            return " ✅" if sort_by == x else ""
+        sort_buttons = [
+            InlineKeyboardButton(
+                text=f"{label}{' ✅' if sort_by == key else ''}",
+                callback_data=f"top_{key}",
+            )
+            for key, (label, _, _) in self.TOP_SORTS.items()
+        ]
+        sort_rows = [sort_buttons[:2], sort_buttons[2:]]
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💰 SC{mark('sc')}", callback_data="top_sc"),
-             InlineKeyboardButton(text=f"🍀 LC{mark('lc')}", callback_data="top_lc")],
-            [InlineKeyboardButton(text=f"⭐ Ур.{mark('level')}", callback_data="top_level"),
-             InlineKeyboardButton(text=f"🎮 Игр{mark('games')}", callback_data="top_games"),
-             InlineKeyboardButton(text=f"📊 ВР{mark('winrate')}", callback_data="top_winrate")],
+            *[row for row in sort_rows if row],
             [InlineKeyboardButton(text="🏢 Топ казино", callback_data="top_casinos")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
+            nav_footer("top"),
         ])
 
     async def cb_top_casinos(self, query: CallbackQuery):
@@ -307,46 +436,125 @@ class Menu:
                 lines.append(f"\n💤 <i>Твоё казино «{casino['name']}» пока не в рейтинге.</i>")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏢 К казино", callback_data="casino")],
-            [InlineKeyboardButton(text="⬅️ Назад",   callback_data="top_sc")],
+            [InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"top_{next(iter(self.TOP_SORTS))}",
+            )],
+            nav_footer("top"),
         ])
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
 
-    async def cb_top(self, query: CallbackQuery):
+    async def cb_top(self, query: CallbackQuery, state: FSMContext = None):
+        if is_current_screen(query, "top"):
+            return await safe_answer(query, "Уже здесь")
+        if state:
+            await state.clear()
         await safe_answer(query)
         await self._show_top(query, "sc")
 
     async def cb_top_sort(self, query: CallbackQuery):
         await safe_answer(query)
-        sort_by = query.data.replace("top_", "")
-        if sort_by not in ("sc", "lc", "level", "games", "winrate"):
+        sort_by = query.data.removeprefix("top_")
+        if sort_by not in self.TOP_SORTS:
             return
         await self._show_top(query, sort_by)
 
     async def _show_top(self, query: CallbackQuery, sort_by: str):
+        _, label, unit = self.TOP_SORTS[sort_by]
+        caller_id = query.from_user.id
+        top_ids = set()
         if sort_by == "winrate":
-            data = self.brain.db.top_winrate(10)
-            lines = ["🏆 <b>Топ по винрейту</b> (мин 10 игр)\n"]
+            data = getattr(self.brain.db, f"top_{sort_by}")(10)
+            lines = [f"🏆 <b>Топ по {label}</b> (мин 10 игр)\n"]
             if not data:
                 lines.append("Пока пусто.")
             medals = ["🥇", "🥈", "🥉"]
             for i, (uname, uid, wins, games, wr, title) in enumerate(data, 1):
+                top_ids.add(uid)
                 medal = medals[i - 1] if i <= 3 else f"{i}."
                 name = f"@{uname}" if uname else f"ID {uid}"
-                lines.append(f"{medal} {name} — {wr}% ({wins}/{games})")
+                if uid == caller_id:
+                    name = f"👉 {name} 👈"
+                wins_text = f"{wins:,}".replace(",", " ")
+                games_text = f"{games:,}".replace(",", " ")
+                lines.append(
+                    f"{medal} {name} — {wr}% "
+                    f"({wins_text}/{games_text})"
+                )
+
+            if caller_id not in top_ids:
+                rank_data = self.brain.db.get_user_rank_winrate(caller_id)
+                if rank_data is None:
+                    lines.append(
+                        "\n🎯 <b>Ты</b> — нужен минимум 10 игр для рейтинга"
+                    )
+                else:
+                    rank, winrate, wins, games, total = rank_data
+                    lines.extend([
+                        "\n┈┈┈┈┈┈┈┈┈┈",
+                        f"🎯 <b>Ты</b> — #{rank} из {total} · "
+                        f"📊 {winrate}% "
+                        f"({wins:,}/{games:,})".replace(",", " "),
+                    ])
+                    if 10 < rank <= 13:
+                        places = rank - 10
+                        place_word = (
+                            "место" if places == 1
+                            else "места" if places in (2, 3, 4)
+                            else "мест"
+                        )
+                        lines.append(
+                            f"<i>💡 До топ-10: ещё {places} "
+                            f"{place_word}!</i>"
+                        )
         else:
             data = self.brain.db.top_by(sort_by, 10)
-            label = {"sc": "SC", "lc": "LC", "level": "уровню", "wins": "победам", "games": "играм"}.get(sort_by, sort_by)
             lines = [f"🏆 <b>Топ по {label}</b>\n"]
             if not data:
                 lines.append("Пусто.")
             medals = ["🥇", "🥈", "🥉"]
             for i, (uname, uid, val, title) in enumerate(data, 1):
+                top_ids.add(uid)
                 medal = medals[i - 1] if i <= 3 else f"{i}."
                 name = f"@{uname}" if uname else f"ID {uid}"
-                lines.append(f"{medal} {name} — {val}")
+                if uid == caller_id:
+                    name = f"👉 {name} 👈"
+                value = f"{val:,}".replace(",", " ")
+                lines.append(f"{medal} {name} — {value}{unit}")
+
+            if caller_id not in top_ids:
+                rank, value, total = self.brain.db.get_user_rank(
+                    caller_id, sort_by
+                )
+                if rank is not None:
+                    value = f"{value:,}".replace(",", " ")
+                    if sort_by == "sc":
+                        value_text = f"💰 {value}"
+                    elif sort_by == "lc":
+                        value_text = f"🍀 {value}"
+                    elif sort_by == "level":
+                        value_text = f"⭐ {value} ур."
+                    else:
+                        value_text = f"🎮 {value} игр"
+                    lines.extend([
+                        "\n┈┈┈┈┈┈┈┈┈┈",
+                        f"🎯 <b>Ты</b> — #{rank} из {total} · "
+                        f"{value_text}",
+                    ])
+                    if 10 < rank <= 13:
+                        places = rank - 10
+                        place_word = (
+                            "место" if places == 1
+                            else "места" if places in (2, 3, 4)
+                            else "мест"
+                        )
+                        lines.append(
+                            f"<i>💡 До топ-10: ещё {places} "
+                            f"{place_word}!</i>"
+                        )
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=self._top_kb(sort_by), parse_mode="HTML")
         except Exception:

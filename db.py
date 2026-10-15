@@ -1,7 +1,31 @@
 import sqlite3
 import random
 import time
+import logging
+import json
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+
+
+def _convert_lc_tiered(lc: int, tiers) -> int:
+    """Convert LC with cumulative upper bounds and per-tier integer rounding."""
+    if lc <= 0:
+        return 0
+    remaining = lc
+    sc = 0
+    prev_cap = 0
+    for cap, rate in tiers:
+        if cap is None:
+            sc += remaining // rate
+            break
+        slice_size = cap - prev_cap
+        chunk = min(remaining, slice_size)
+        sc += chunk // rate
+        remaining -= chunk
+        prev_cap = cap
+        if remaining <= 0:
+            break
+    return sc
 
 
 @lru_cache(maxsize=1)
@@ -231,6 +255,55 @@ class DB:
                 updated_at INTEGER DEFAULT 0
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                event_type TEXT NOT NULL,
+                payload TEXT DEFAULT '',
+                created_at INTEGER NOT NULL
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_created
+            ON events (created_at DESC)
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_user
+            ON events (user_id, created_at DESC)
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_visits (
+                user_id INTEGER NOT NULL,
+                visit_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (user_id, visit_date)
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_daily_visits_date
+            ON daily_visits (visit_date)
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS system_flags (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS seasons (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at   INTEGER NOT NULL,
+                ended_at     INTEGER DEFAULT 0,
+                snapshot_top TEXT DEFAULT ''
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_seasons_ended
+            ON seasons (ended_at DESC)
+        """)
 
         self._migrate()
         self._init_items()
@@ -261,6 +334,10 @@ class DB:
             "total_lost":      "INTEGER DEFAULT 0",
             "overheat_score":  "INTEGER DEFAULT 0",
             "last_spin_ts":    "INTEGER DEFAULT 0",
+            "last_screen":     "TEXT DEFAULT ''",
+            "last_screen_ts":  "INTEGER DEFAULT 0",
+            "cele_seen_v100":  "INTEGER DEFAULT 0",
+            "lc_before_v100":  "INTEGER DEFAULT -1",
         }
         for col, definition in needed_users.items():
             if col not in existing_cols:
@@ -473,7 +550,12 @@ class DB:
             for cosmetic in cosmetics.values():
                 price = cosmetic.get("price_sc")
                 item_id = cosmetic.get("shop_id")
-                if not isinstance(price, int) or price <= 0 or not item_id:
+                if (
+                    not isinstance(price, int)
+                    or price < 0
+                    or not isinstance(item_id, int)
+                    or item_id <= 0
+                ):
                     continue
                 self.conn.execute(
                     "INSERT INTO items (item_id, name, price_sc, rarity, category) "
@@ -675,6 +757,50 @@ class DB:
             (min_games, limit)
         )
         return cur.fetchall()
+
+    def get_user_rank(self, user_id, field):
+        allowed = {"sc", "lc", "level", "wins", "games"}
+        if field not in allowed:
+            field = "sc"
+
+        row = self.conn.execute(
+            f"SELECT {field} FROM users WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if row is None:
+            return None, 0, 0
+        value = row[0] or 0
+        above = self.conn.execute(
+            f"SELECT COUNT(*) FROM users WHERE {field} > ?",
+            (value,)
+        ).fetchone()[0]
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM users"
+        ).fetchone()[0]
+        return above + 1, value, total
+
+    def get_user_rank_winrate(self, user_id, min_games=10):
+        row = self.conn.execute(
+            "SELECT wins, games FROM users WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if not row:
+            return None
+        wins, games = row[0] or 0, row[1] or 0
+        if games < min_games:
+            return None
+
+        winrate = wins * 100.0 / games
+        above = self.conn.execute(
+            "SELECT COUNT(*) FROM users "
+            "WHERE games >= ? AND (wins*100.0/games) > ?",
+            (min_games, winrate)
+        ).fetchone()[0]
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM users WHERE games >= ?",
+            (min_games,)
+        ).fetchone()[0]
+        return above + 1, round(winrate, 1), wins, games, total
 
     def get_bot_stats(self):
         cur = self.conn.execute(
@@ -1849,4 +1975,375 @@ class DB:
         cur = self.conn.execute(
             "SELECT COUNT(*) FROM complaints WHERE status='new'"
         )
-        return cur.fetchone()[0]
+        return cur.fetchone()[0] 
+
+    def log_event(self, user_id, username, event_type, payload=""):
+        """Insert an activity event without allowing analytics errors to escape."""
+        try:
+            self.conn.execute(
+                "INSERT INTO events "
+                "(user_id, username, event_type, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, username, event_type, str(payload or "")[:200], int(time.time()))
+            )
+            self.conn.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            logging.getLogger(__name__).exception("Failed to log activity event")
+
+    def get_recent_events(self, limit=20):
+        cur = self.conn.execute(
+            "SELECT id, user_id, username, event_type, payload, created_at "
+            "FROM events ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        columns = ("id", "user_id", "username", "event_type", "payload", "created_at")
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+    def get_top_screens(self, minutes=5, limit=10):
+        threshold = int(time.time()) - minutes * 60
+        cur = self.conn.execute(
+            "SELECT last_screen, COUNT(*) FROM users "
+            "WHERE last_screen != '' AND last_screen_ts > ? "
+            "GROUP BY last_screen ORDER BY COUNT(*) DESC LIMIT ?",
+            (threshold, limit)
+        )
+        return cur.fetchall()
+
+    def set_user_screen(self, user_id, screen):
+        now = int(time.time())
+        cur = self.conn.execute(
+            "SELECT last_screen, last_screen_ts FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        row = cur.fetchone()
+        if row and row[0] == screen and now - row[1] < 30:
+            return
+        if row is None:
+            self._ensure(user_id)
+        self.conn.execute(
+            "UPDATE users SET last_screen=?, last_screen_ts=? WHERE user_id=?",
+            (screen, now, user_id)
+        )
+        self.conn.commit()
+
+    def record_daily_visit(self, user_id):
+        visit_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.conn.execute(
+            "INSERT INTO daily_visits (user_id, visit_date, count) "
+            "VALUES (?, ?, 1) "
+            "ON CONFLICT(user_id, visit_date) DO UPDATE "
+            "SET count=count + 1",
+            (user_id, visit_date)
+        )
+        self.conn.commit()
+
+    def get_retention_summary(self, days=7):
+        today = datetime.now(timezone.utc).date()
+        today_text = today.strftime("%Y-%m-%d")
+        window_start = (today - timedelta(days=max(days, 1) - 1)).strftime("%Y-%m-%d")
+        wau_start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+
+        dau = self.conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM daily_visits WHERE visit_date=?",
+            (today_text,)
+        ).fetchone()[0]
+        wau = self.conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM daily_visits WHERE visit_date>=?",
+            (wau_start,)
+        ).fetchone()[0]
+        total_visits, user_count = self.conn.execute(
+            "SELECT COALESCE(SUM(count), 0), COUNT(DISTINCT user_id) "
+            "FROM daily_visits WHERE visit_date>=?",
+            (window_start,)
+        ).fetchone()
+
+        visit_counts = self.conn.execute(
+            "SELECT user_id, SUM(count) FROM daily_visits "
+            "WHERE visit_date>=? GROUP BY user_id",
+            (window_start,)
+        ).fetchall()
+        distribution = {"1": 0, "2-3": 0, "4-7": 0, "8+": 0}
+        for _, visits in visit_counts:
+            if visits == 1:
+                distribution["1"] += 1
+            elif visits <= 3:
+                distribution["2-3"] += 1
+            elif visits <= 7:
+                distribution["4-7"] += 1
+            else:
+                distribution["8+"] += 1
+
+        return {
+            "dau": dau,
+            "wau": wau,
+            "avg_visits_per_user": total_visits / user_count if user_count else 0.0,
+            "distribution": distribution,
+        }
+
+    def get_economy_summary(self):
+        averages = self.conn.execute(
+            "SELECT AVG(lc), SUM(lc), AVG(sc), SUM(sc), AVG(level), COUNT(*) "
+            "FROM users"
+        ).fetchone()
+        avg_lc, total_lc, avg_sc, total_sc, avg_level, user_count = averages
+        median_lc = self.conn.execute(
+            "SELECT lc FROM users ORDER BY lc LIMIT 1 OFFSET ?",
+            (user_count // 2,)
+        ).fetchone()
+        median_sc = self.conn.execute(
+            "SELECT sc FROM users ORDER BY sc LIMIT 1 OFFSET ?",
+            (user_count // 2,)
+        ).fetchone()
+        median_level = self.conn.execute(
+            "SELECT level FROM users ORDER BY level LIMIT 1 OFFSET ?",
+            (user_count // 2,)
+        ).fetchone()
+        top_10_lc = self.conn.execute(
+            "SELECT user_id, username, lc FROM users "
+            "ORDER BY lc DESC LIMIT 10"
+        ).fetchall()
+        return {
+            "avg_lc": int(avg_lc or 0),
+            "median_lc": median_lc[0] if median_lc else 0,
+            "total_lc": total_lc or 0,
+            "avg_sc": int(avg_sc or 0),
+            "median_sc": median_sc[0] if median_sc else 0,
+            "total_sc": total_sc or 0,
+            "avg_level": float(avg_level or 0),
+            "median_level": median_level[0] if median_level else 0,
+            "top_10_lc": top_10_lc,
+        }
+
+    def get_top_purchases(self, days=7, limit=10):
+        cutoff = int(time.time()) - days * 86400
+        cur = self.conn.execute(
+            "SELECT event_type || ':' || "
+            "substr(payload, 1, instr(payload || '|', '|') - 1) AS item_label, "
+            "COUNT(*) "
+            "FROM events "
+            "WHERE event_type IN ('buy_badge', 'buy_title', 'open_room', 'hire_staff') "
+            "AND created_at>=? "
+            "GROUP BY event_type, "
+            "substr(payload, 1, instr(payload || '|', '|') - 1) "
+            "ORDER BY COUNT(*) DESC LIMIT ?",
+            (cutoff, limit)
+        )
+        return cur.fetchall()
+
+    def get_ignored_content(self, days=7):
+        from cosmetics import BADGES
+
+        cutoff = int(time.time()) - days * 86400
+        purchased = {
+            "buy_badge": set(),
+            "open_room": set(),
+            "hire_staff": set(),
+        }
+        for event_type, payload in self.conn.execute(
+            "SELECT event_type, payload FROM events "
+            "WHERE event_type IN ('buy_badge', 'open_room', 'hire_staff') "
+            "AND created_at>=?",
+            (cutoff,)
+        ).fetchall():
+            purchased[event_type].add((payload or "").split("|", 1)[0])
+
+        candidates = []
+        candidates.extend(
+            (badge["shop_id"], "buy_badge")
+            for badge in BADGES.values()
+            if isinstance(badge.get("shop_id"), int) and badge["shop_id"] > 0
+        )
+        candidates.extend((room_id, "open_room") for room_id in self.ROOMS)
+        candidates.extend((staff_id, "hire_staff") for staff_id in self.STAFF)
+        return [
+            item_id for item_id, event_type in candidates
+            if str(item_id) not in purchased[event_type]
+        ]
+
+    def get_flag(self, key, default=None):
+        row = self.conn.execute(
+            "SELECT value FROM system_flags WHERE key=?",
+            (key,)
+        ).fetchone()
+        return row[0] if row else default
+
+    def set_flag(self, key, value):
+        self.conn.execute(
+            "INSERT INTO system_flags (key, value, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value=excluded.value, updated_at=excluded.updated_at",
+            (key, str(value), int(time.time()))
+        )
+        self.conn.commit()
+
+    def get_current_season(self) -> int:
+        return int(self.get_flag("season_current", 1))
+
+    def start_new_season(self) -> int:
+        now = int(time.time())
+        top = self.get_all_user_ids_sorted_by_lc(limit=10)
+        snapshot = json.dumps(top, ensure_ascii=False)
+        with self.conn:
+            current_id = self.get_current_season()
+            self.conn.execute(
+                "UPDATE seasons SET ended_at=?, snapshot_top=? "
+                "WHERE id=? AND ended_at=0",
+                (now, snapshot, current_id)
+            )
+            cursor = self.conn.execute(
+                "INSERT INTO seasons (started_at) VALUES (?)",
+                (now,)
+            )
+            season_id = cursor.lastrowid
+            self.conn.execute(
+                "INSERT INTO system_flags (key, value, updated_at) "
+                "VALUES ('season_current', ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value=excluded.value, updated_at=excluded.updated_at",
+                (str(season_id), now)
+            )
+        return season_id
+
+    def get_season_elapsed(self) -> int:
+        row = self.conn.execute(
+            "SELECT started_at FROM seasons "
+            "WHERE id=? AND ended_at=0",
+            (self.get_current_season(),)
+        ).fetchone()
+        if row is None:
+            return 0
+        return max(0, int(time.time()) - row[0])
+
+    def get_last_season_results(self):
+        row = self.conn.execute(
+            "SELECT id, snapshot_top FROM seasons "
+            "WHERE ended_at>0 ORDER BY ended_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "season_id": row[0],
+            "top": [tuple(entry) for entry in json.loads(row[1] or "[]")],
+        }
+
+    def get_all_user_ids_sorted_by_lc(self, limit=10):
+        return self.conn.execute(
+            "SELECT user_id, username, lc FROM users "
+            "ORDER BY lc DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+
+    def reset_season_data(self, keep_top_3_ids=()):
+        now = int(time.time())
+        keep_ids = tuple(keep_top_3_ids)
+        reset_columns = (
+            "lc=0, wins=0, losses=0, games=0, streak=0, max_streak=0, "
+            "total_bets=0, total_won=0, "
+            "total_lost=0, overheat_score=0"
+        )
+        with self.conn:
+            if keep_ids:
+                placeholders = ",".join("?" for _ in keep_ids)
+                where_not_kept = f"user_id NOT IN ({placeholders})"
+                params = keep_ids
+            else:
+                where_not_kept = "1=1"
+                params = ()
+            self.conn.execute(
+                f"UPDATE users SET {reset_columns} WHERE {where_not_kept}",
+                params
+            )
+            self.conn.execute(
+                f"DELETE FROM casino_rooms WHERE {where_not_kept}",
+                params
+            )
+            self.conn.execute(
+                f"DELETE FROM casino_staff WHERE {where_not_kept}",
+                params
+            )
+            self.conn.execute(
+                "UPDATE casinos SET total_earned=0, last_collect=? "
+                f"WHERE {where_not_kept}",
+                (now, *params)
+            )
+
+    def convert_lc_to_sc_everyone(self):
+        """Apply configured tiered LC→SC conversion to all users."""
+        from config import CONVERSION_TIERS
+
+        now = int(time.time())
+        with self.conn:
+            rows = self.conn.execute(
+                "SELECT user_id, lc FROM users WHERE lc>0"
+            ).fetchall()
+            players = len(rows)
+            total_lc = 0
+            total_sc = 0
+            for user_id, lc in rows:
+                sc_gain = _convert_lc_tiered(lc, CONVERSION_TIERS)
+                self.conn.execute(
+                    "UPDATE users SET lc=0, sc=sc+?, lc_before_v100=? "
+                    "WHERE user_id=?",
+                    (sc_gain, lc, user_id)
+                )
+                total_lc += lc
+                total_sc += sc_gain
+            summary = json.dumps({
+                "tiers": CONVERSION_TIERS,
+                "players": players,
+                "total_lc": total_lc,
+                "total_sc": total_sc,
+            })
+            self.conn.execute(
+                "INSERT INTO system_flags (key, value, updated_at) "
+                "VALUES ('conversion_summary_v100', ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value=excluded.value, updated_at=excluded.updated_at",
+                (summary, now)
+            )
+        return players, total_lc, total_sc
+
+    def get_user_conversion_before(self, user_id):
+        row = self.conn.execute(
+            "SELECT lc_before_v100 FROM users WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if row is None or row[0] is None or row[0] < 0:
+            return None
+        from config import CONVERSION_TIERS
+
+        lc_before = row[0]
+        return {
+            "lc_before": lc_before,
+            "sc_gained": _convert_lc_tiered(
+                lc_before, CONVERSION_TIERS
+            ),
+            "tiers": CONVERSION_TIERS,
+        }
+
+    def mark_celebration_seen(self, user_id):
+        self.conn.execute(
+            "UPDATE users SET cele_seen_v100=1 WHERE user_id=?",
+            (user_id,)
+        )
+        self.conn.commit()
+
+    def has_seen_celebration(self, user_id) -> bool:
+        row = self.conn.execute(
+            "SELECT cele_seen_v100 FROM users WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        return bool(row[0]) if row else False
+
+    def grant_tickets_uncapped(self, user_id, count):
+        self._ensure(user_id)
+        self.conn.execute(
+            "UPDATE users SET tickets=tickets + ? WHERE user_id=?",
+            (count, user_id)
+        )
+        self.conn.commit()

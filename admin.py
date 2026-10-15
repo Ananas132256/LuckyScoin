@@ -3,10 +3,14 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import asyncio
+import html
+import time
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from cosmetics import BADGES, badge_slots_for_level
+from db import DB
+from utils import format_number
 
 
 # ============================================================
@@ -15,6 +19,45 @@ from cosmetics import BADGES, badge_slots_for_level
 ADMIN_IDS = [
     int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()
 ]
+
+EVENT_STYLE = {
+    "signup":         ("🆕", "регистрация"),
+    "spin":           ("🎰", "спин"),
+    "roulette":       ("🎟", "рулетка"),
+    "buy_badge":      ("🎖", "купил медаль"),
+    "buy_title":      ("🏷", "купил титул"),
+    "equip_badge":    ("⚙️", "надел медаль"),
+    "break_badge":    ("💔", "медаль сломалась"),
+    "open_room":      ("🏗", "открыл зал"),
+    "hire_staff":     ("👔", "нанял сотрудника"),
+    "collect_casino": ("💵", "собрал доход"),
+    "event_casino":   ("🎲", "событие казино"),
+    "trade":          ("💱", "трейд"),
+    "level_up":       ("⭐", "новый уровень"),
+}
+
+
+def _event_style(event_type):
+    return EVENT_STYLE.get(event_type, ("•", event_type))
+
+
+SCREEN_LABELS = {
+    "menu": "🏠 Главное меню",
+    "play": "🎰 Игровой зал",
+    "play_bet": "💵 Ввод ставки",
+    "play_roulette": "🎟 Рулетка",
+    "play_exchange": "💱 Обмен LC→SC",
+    "casino": "🏢 Своё казино",
+    "casino_tycoon": "🏗 Помещения/сотрудники",
+    "shop": "🛒 Магазин",
+    "trade": "💱 Трейд",
+    "inv": "🎒 Инвентарь",
+    "top": "🏆 Лидерборд",
+    "profile": "👤 Профиль",
+    "settings": "⚙️ Настройки",
+    "complaint": "📮 Жалобы",
+    "admin": "🛠 Админка",
+}
 
 
 class MaintStates(StatesGroup):
@@ -42,6 +85,10 @@ def is_admin(user_id: int, db=None) -> bool:
     return False
 
 
+def _format_decimal(value: float) -> str:
+    return f"{value:,.1f}".replace(",", " ")
+
+
 class Admin:
     def __init__(self, brain):
         self.brain = brain
@@ -51,6 +98,8 @@ class Admin:
     def register(self, dp: Dispatcher):
         # обычные команды
         dp.message(Command("admin"))(self.cmd_admin)
+        dp.message(Command("apply_update_100"))(self.cmd_apply_update)
+        dp.message(Command("end_season"))(self.cmd_end_season)
         dp.message(Command("give"))(self.cmd_give)
         dp.message(Command("take"))(self.cmd_take)
         dp.message(Command("setbalance"))(self.cmd_setbalance)
@@ -86,6 +135,21 @@ class Admin:
         dp.callback_query(F.data == "admin_refresh")(self.cb_stats)
         dp.callback_query(F.data == "admin_admins")(self.cb_admins)
         dp.callback_query(F.data == "admin_log")(self.cb_log)
+        dp.callback_query(F.data == "admin_live")(self.cb_live)
+        dp.callback_query(F.data == "admin_stuck")(self.cb_stuck)
+        dp.callback_query(F.data == "admin_analytics")(self.cb_analytics)
+        dp.callback_query(F.data == "admin_apply_update")(
+            self.cb_apply_update_start
+        )
+        dp.callback_query(F.data == "admin_apply_confirm")(
+            self.cb_apply_confirm
+        )
+        dp.callback_query(F.data == "admin_end_season")(
+            self.cb_end_season_start
+        )
+        dp.callback_query(F.data == "admin_end_season_confirm")(
+            self.cb_end_season_confirm
+        )
 
         # техперерыв
         dp.callback_query(F.data == "admin_maint")(self.cb_maint)
@@ -133,21 +197,249 @@ class Admin:
     def _admin_kb(self):
         unseen = self.brain.db.count_unseen_complaints()
         complaint_label = f"📮 Жалобы ({unseen})" if unseen else "📮 Жалобы"
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить",   callback_data="admin_refresh")],
-            [InlineKeyboardButton(text="💰 Экономика",  callback_data="admin_econ")],
+        buttons = [
+            [
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
+                InlineKeyboardButton(text="📡 Live-лента", callback_data="admin_live"),
+            ],
+            [
+                InlineKeyboardButton(text="💰 Экономика", callback_data="admin_econ"),
+                InlineKeyboardButton(text="🎯 Застревания", callback_data="admin_stuck"),
+            ],
+            [InlineKeyboardButton(text="📊 Аналитика", callback_data="admin_analytics")],
             [InlineKeyboardButton(text="👑 Админы",     callback_data="admin_admins")],
             [InlineKeyboardButton(text=complaint_label, callback_data="admin_complaints")],
             [InlineKeyboardButton(text="📜 Лог",        callback_data="admin_log")],
             [InlineKeyboardButton(text="🛠 Техперерыв",  callback_data="admin_maint")],
             [InlineKeyboardButton(text="📋 Помощь",     callback_data="admin_help")],
-        ])
+            [InlineKeyboardButton(
+                text="🏁 Завершить сезон",
+                callback_data="admin_end_season",
+            )],
+        ]
+        if self.brain.db.get_flag("lc_sc_conversion_done") != "1":
+            buttons.insert(1, [InlineKeyboardButton(
+                text="🚀 Применить 1.0.0",
+                callback_data="admin_apply_update",
+            )])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     async def cmd_admin(self, message: Message):
         if not self._check(message):
             return
         self._log(message)
         await self._send_stats(message)
+
+    async def cmd_apply_update(self, message: Message):
+        """Show confirmation for the one-time 1.0.0 update."""
+        if not self._check(message):
+            return
+        if self.brain.db.get_flag("lc_sc_conversion_done") == "1":
+            return await message.answer("ℹ️ Обновление уже применено ранее.")
+        await self._render_apply_confirm(message)
+
+    async def cb_apply_update_start(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+        if self.brain.db.get_flag("lc_sc_conversion_done") == "1":
+            return await query.answer(
+                "ℹ️ Обновление уже применено ранее.",
+                show_alert=True,
+            )
+        await query.answer()
+        await self._render_apply_confirm(query.message)
+
+    async def _render_apply_confirm(self, target):
+        """Render the irreversible update confirmation."""
+        text = (
+            "🚀 <b>Применить обновление 1.0.0</b>\n\n"
+            "Это ОДНОРАЗОВОЕ действие:\n"
+            "• Все LC игроков → SC по каскадному курсу\n"
+            "• Обнулится сезон (LC, казино, статистика)\n"
+            "• Включится 2-дневное окно титула «Старичок»\n"
+            "• Включится экран приветствия для всех\n\n"
+            "Каскадный курс:\n"
+            "  • до 100 000 LC — 500 LC = 1 SC\n"
+            "  • выше — 5 000 LC = 1 SC\n\n"
+            "<b>Это нельзя отменить.</b> Продолжить?"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ ПРИМЕНИТЬ",
+                callback_data="admin_apply_confirm",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="admin_refresh",
+            )],
+        ])
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    async def cb_apply_confirm(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+        if self.brain.db.get_flag("lc_sc_conversion_done") == "1":
+            return await query.answer(
+                "ℹ️ Обновление уже применено ранее.",
+                show_alert=True,
+            )
+
+        await query.answer("🚀 Применяю...", show_alert=False)
+        # Recheck after answering the callback: another confirmation may
+        # have completed while this handler was awaiting Telegram.
+        if self.brain.db.get_flag("lc_sc_conversion_done") == "1":
+            return
+
+        from config import UPDATE_GIFT_TITLE_DAYS
+        now = int(time.time())
+
+        players, total_lc, total_sc = \
+            self.brain.db.convert_lc_to_sc_everyone()
+
+        self.brain.db.start_new_season()
+        self.brain.db.reset_season_data()
+        self.brain.db.set_flag("season_current", "1")
+
+        self.brain.db.set_flag("lc_sc_conversion_done", "1")
+        self.brain.db.set_flag(
+            "old_title_window_until",
+            str(now + UPDATE_GIFT_TITLE_DAYS * 86400),
+        )
+
+        self.brain.db.conn.execute(
+            "UPDATE users SET cele_seen_v100 = 0"
+        )
+        self.brain.db.conn.commit()
+
+        self.brain.db.log_admin(
+            query.from_user.id,
+            "apply_update_100",
+            f"players={players} lc={total_lc} sc={total_sc}",
+        )
+
+        text = (
+            "✅ <b>Обновление 1.0.0 применено</b>\n\n"
+            f"👥 Игроков затронуто: <b>{players}</b>\n"
+            f"🍀 Всего LC конвертировано: <b>{total_lc:,}</b>\n"
+            f"💰 Всего SC начислено: <b>{total_sc:,}</b>\n\n"
+            "🎁 Титул «Старичок» активен 2 дня.\n"
+            "🎉 Все увидят приветственный экран при следующем /start."
+        ).replace(",", " ")
+        try:
+            await query.message.edit_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="⬅️ В админку",
+                        callback_data="admin_refresh",
+                    )
+                ]]),
+            )
+        except Exception:
+            await query.message.answer(text, parse_mode="HTML")
+
+    async def cmd_end_season(self, message: Message):
+        if not self._check(message):
+            return
+        await self._render_end_season_confirm(message)
+
+    async def cb_end_season_start(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+        await query.answer()
+        await self._render_end_season_confirm(query.message)
+
+    async def _render_end_season_confirm(self, target):
+        top = self.brain.db.get_all_user_ids_sorted_by_lc(limit=3)
+        lines = [
+            "🏁 <b>Завершить сезон и начать новый</b>\n",
+            "Топ-3 получат награду:",
+        ]
+        for place, (user_id, username, lc) in enumerate(top, 1):
+            name = (
+                f"@{html.escape(str(username))}"
+                if username else f"id{user_id}"
+            )
+            lines.append(
+                f"{place}. {name} — {lc:,} LC".replace(",", " ")
+            )
+        lines.append(
+            "\n<b>Все LC, казино, уровни и статистика сбросятся.</b>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ ЗАВЕРШИТЬ СЕЗОН",
+                callback_data="admin_end_season_confirm",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="admin_refresh",
+            )],
+        ])
+        await target.answer(
+            "\n".join(lines),
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+
+    async def cb_end_season_confirm(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        from config import SEASON_REWARD_TICKETS
+
+        top = self.brain.db.get_all_user_ids_sorted_by_lc(limit=3)
+        if not top:
+            return await query.answer(
+                "Нет игроков для награды.",
+                show_alert=True,
+            )
+
+        self.brain.db.start_new_season()
+        # The leaderboard is already saved by start_new_season; reset all
+        # players, including the winners, as required for a fresh season.
+        self.brain.db.reset_season_data()
+        new_num = self.brain.db.get_current_season()
+
+        reward_lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for place, (user_id, username, lc) in enumerate(top, 1):
+            reward = SEASON_REWARD_TICKETS.get(place, 0)
+            if reward:
+                self.brain.db.grant_tickets_uncapped(user_id, reward)
+            name = (
+                f"@{html.escape(str(username))}"
+                if username else f"id{user_id}"
+            )
+            reward_lines.append(
+                f"{medals[place - 1]} {name} — {lc:,} LC → 🎟 {reward}"
+                .replace(",", " ")
+            )
+
+        broadcast = (
+            "🏁 <b>Сезон завершён!</b>\n\n"
+            "Награды топ-3:\n"
+            + "\n".join(reward_lines)
+            + "\n\n🎉 <b>Начинается новый сезон!</b>\n"
+            "Все LC, казино, уровни и статистика сброшены. "
+            "Успей забраться на вершину первым!\n\n"
+            "<i>SC, значки и инвентарь остаются с тобой.</i>"
+        )
+        await self._broadcast(broadcast)
+
+        self.brain.db.log_admin(
+            query.from_user.id,
+            "end_season",
+            f"new={new_num}",
+        )
+
+        await query.answer("✅ Сезон завершён.", show_alert=True)
+        await query.message.answer(
+            f"✅ <b>Сезон {new_num} начат</b>\n\n"
+            + "\n".join(reward_lines),
+            parse_mode="HTML",
+        )
 
     async def _send_stats(self, message_or_query):
         s = self.brain.db.get_bot_stats()
@@ -197,6 +489,207 @@ class Admin:
         ])
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+        await query.answer()
+
+    def _screen_kb(self, refresh_callback):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновить", callback_data=refresh_callback
+                ),
+                InlineKeyboardButton(
+                    text="⬅️ Назад", callback_data="admin_refresh"
+                ),
+            ]
+        ])
+
+    def _fmt_money(self, n) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1000:
+            return f"{n / 1000:.1f}k"
+        return str(n)
+
+    def _fmt_median(self, n, unit="") -> str:
+        return f"{n}{unit}"
+
+    async def cb_live(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        rows = self.brain.db.get_recent_events(limit=20)
+        lines = ["📡 <b>Live-лента</b> (последние 20)"]
+        if not rows:
+            lines.append("<i>Пока пусто.</i>")
+        for event in rows:
+            ts = time.strftime(
+                "%H:%M", time.localtime(event["created_at"])
+            )
+            username = event["username"]
+            user = (
+                f"@{html.escape(str(username))}"
+                if username else f"id{event['user_id']}"
+            )
+            emoji, label = _event_style(event["event_type"])
+            payload = (
+                f" · <i>{html.escape(str(event['payload']))}</i>"
+                if event["payload"] else ""
+            )
+            lines.append(
+                f"<code>{ts}</code> {emoji} {user} — "
+                f"{html.escape(label)}{payload}"
+            )
+
+        text = "\n".join(lines)
+        while len(text) > 4000 and len(lines) > 1:
+            lines.pop()
+            text = "\n".join(lines)
+        kb = self._screen_kb("admin_live")
+        try:
+            await query.message.edit_text(
+                text, reply_markup=kb, parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        await query.answer()
+
+    def _count_online(self, minutes=10) -> int:
+        threshold = int(time.time()) - minutes * 60
+        return self.brain.db.conn.execute(
+            "SELECT COUNT(*) FROM users WHERE last_screen_ts > ?",
+            (threshold,)
+        ).fetchone()[0]
+
+    async def cb_stuck(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        rows = self.brain.db.get_top_screens(minutes=10, limit=10)
+        total_online = self._count_online(minutes=10)
+        lines = [
+            "🎯 <b>Где сейчас сидят игроки</b>",
+            f"👥 Онлайн (10 мин): <b>{format_number(total_online)}</b>",
+            "",
+        ]
+        if not rows:
+            lines.append("<i>Никого нет онлайн.</i>")
+        else:
+            max_count = max(count for _, count in rows)
+            for screen, count in rows:
+                bar_len = max(1, int(count / max_count * 10))
+                bar = "▰" * bar_len + "▱" * (10 - bar_len)
+                label = html.escape(
+                    SCREEN_LABELS.get(screen, str(screen))
+                )
+                lines.append(
+                    f"{bar} <b>{format_number(count)}</b> — {label}"
+                )
+        try:
+            await query.message.edit_text(
+                "\n".join(lines),
+                reply_markup=self._screen_kb("admin_stuck"),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await query.answer()
+
+    async def cb_analytics(self, query: CallbackQuery):
+        if not self._check_cb(query):
+            return await query.answer("⛔ Нет доступа", show_alert=True)
+
+        economy = self.brain.db.get_economy_summary()
+        retention = self.brain.db.get_retention_summary(days=7)
+        purchases = self.brain.db.get_top_purchases(days=7, limit=10)
+        player_count = self.brain.db.get_bot_stats()["users"]
+
+        lines = [
+            "📊 <b>Экономика</b>",
+            f"• Игроков: {format_number(player_count)}",
+            (
+                f"• SC всего: {self._fmt_money(economy['total_sc'])} · "
+                f"в среднем {self._fmt_money(economy['avg_sc'])} · "
+                f"медиана {self._fmt_median(economy['median_sc'])}"
+            ),
+            (
+                f"• LC всего: {self._fmt_money(economy['total_lc'])} · "
+                f"в среднем {self._fmt_money(economy['avg_lc'])} · "
+                f"медиана {self._fmt_median(economy['median_lc'])}"
+            ),
+            (
+                f"• Уровень: средний {_format_decimal(economy['avg_level'])} · "
+                f"медиана {self._fmt_median(economy['median_level'])}"
+            ),
+            "• Топ-5 по LC:",
+        ]
+        top_users = economy["top_10_lc"][:5]
+        if top_users:
+            for rank, (user_id, username, lc) in enumerate(top_users, 1):
+                user_label = (
+                    f"@{html.escape(str(username))}"
+                    if username else f"id{user_id}"
+                )
+                lines.append(
+                    f"  {rank}. {user_label} — {self._fmt_money(lc)}"
+                )
+        else:
+            lines.append("  <i>Пока нет игроков.</i>")
+
+        distribution = retention["distribution"]
+        lines.extend([
+            "",
+            "📈 <b>Retention (7 дней)</b>",
+            f"• DAU (сегодня): {format_number(retention['dau'])}",
+            f"• WAU (7 дней): {format_number(retention['wau'])}",
+            (
+                "• Среднее заходов на юзера: "
+                f"{_format_decimal(retention['avg_visits_per_user'])}"
+            ),
+            (
+                f"• 1 заход: {format_number(distribution['1'])}  • "
+                f"2-3: {format_number(distribution['2-3'])}  • "
+                f"4-7: {format_number(distribution['4-7'])}  • "
+                f"8+: {format_number(distribution['8+'])}"
+            ),
+            "",
+            "🛒 <b>Топ покупок (7 дней)</b>",
+        ])
+        if not purchases:
+            lines.append("<i>Покупок пока нет.</i>")
+        else:
+            icons = {
+                "buy_badge": "🎖",
+                "buy_title": "🏷",
+                "open_room": "🏗",
+                "hire_staff": "👔",
+            }
+            for item_label, count in purchases:
+                event_type, _, item_name = item_label.partition(":")
+                label = item_name
+                if event_type == "open_room":
+                    try:
+                        label = DB.ROOMS[int(item_name)]["name"]
+                    except (KeyError, ValueError):
+                        pass
+                elif event_type == "hire_staff":
+                    try:
+                        label = DB.STAFF[int(item_name)]["name"]
+                    except (KeyError, ValueError):
+                        pass
+                lines.append(
+                    f"• {icons.get(event_type, '🛒')} "
+                    f"{html.escape(str(label))} — "
+                    f"{format_number(count)} раз"
+                )
+
+        try:
+            await query.message.edit_text(
+                "\n".join(lines),
+                reply_markup=self._screen_kb("admin_analytics"),
+                parse_mode="HTML",
+            )
         except Exception:
             pass
         await query.answer()
@@ -885,10 +1378,76 @@ class Admin:
         self.brain.db.set_maintenance(False, "")
         self.brain.db.log_admin(query.from_user.id, "maint_off", "")
         await query.answer("✅ Техперерыв выключен", show_alert=True)
-        await self._broadcast(
-            "✅ <b>Технические работы завершены!</b>\n\nСнова всё работает — заходи и играй! 🎰"
-        )
+        asyncio.create_task(self._welcome_back_all_users())
         await self.cb_maint(query)
+
+    async def _welcome_back_all_users(self):
+        """Send each non-admin user the one-time welcome-back sequence."""
+        def report(message):
+            try:
+                print(message)
+            except Exception:
+                pass
+
+        try:
+            from config import UPDATE_GIF_FILE_ID
+            from menu import Menu
+
+            if self.brain.db.get_flag("welcome_back_sent_v100") == "1":
+                return
+            self.brain.db.set_flag("welcome_back_sent_v100", "1")
+            user_ids = self.brain.db.get_all_user_ids()
+        except Exception as error:
+            report(f"⚠️ welcome_back setup: {error}")
+            return
+
+        menu = Menu(self.brain)
+        sent = 0
+        failed = 0
+        for uid in user_ids:
+            try:
+                if is_admin(uid, self.brain.db):
+                    continue
+                await self.brain.bot.send_message(
+                    uid,
+                    "🔄 <b>Чат обновляется...</b>\n"
+                    "<i>Подожди пару секунд.</i>",
+                    parse_mode="HTML",
+                )
+                await asyncio.sleep(1.5)
+
+                caption = menu.build_celebration_caption(uid)
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🎰 Вернуться в меню",
+                        callback_data="cele_done",
+                    )
+                ]])
+                try:
+                    await self.brain.bot.send_animation(
+                        chat_id=uid,
+                        animation=UPDATE_GIF_FILE_ID,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    )
+                except Exception as gif_error:
+                    report(f"⚠️ GIF send failed for {uid}: {gif_error}")
+                    await self.brain.bot.send_message(
+                        uid,
+                        caption,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    )
+
+                self.brain.db.mark_celebration_seen(uid)
+                sent += 1
+                await asyncio.sleep(0.05)
+            except Exception as error:
+                failed += 1
+                report(f"⚠️ welcome_back {uid}: {error}")
+
+        report(f"📢 Welcome-back: sent={sent} failed={failed}")
 
     async def _broadcast(self, text):
         user_ids = self.brain.db.get_all_user_ids()

@@ -442,6 +442,12 @@ class Trade:
                     show_alert=True,
                 )
 
+            for uid in (from_id, to_id):
+                self.brain.db.log_event(
+                    uid, "", "trade",
+                    f"{self._asset_label(give)}|{self._asset_label(want)}"
+                )
+
             # Удаляем предложение только после успешной фиксации всех передач.
             del self.pending[trade_id]
 

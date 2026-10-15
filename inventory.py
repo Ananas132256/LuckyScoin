@@ -8,7 +8,7 @@ from cosmetics import (
     BADGES, TITLES, RARITY_EMOJI, CRAFT_CHANCES, SLOT_UNLOCK_LEVELS,
     badge_slots_for_level, get_next_rarity, is_unlocked, describe_effect_dict,
 )
-from utils import safe_answer
+from utils import nav_footer, safe_answer, with_hero
 
 # Включает/выключает отображение кнопки "⚒ Крафт" в инвентаре.
 # True — крафт доступен, False — кнопка скрыта.
@@ -71,8 +71,9 @@ class Inventory:
         return {
             tid for tid, title in TITLES.items()
             if (
-                self.brain.db.has_item(user_id, title["shop_id"])
-                if title.get("price_sc") and title.get("shop_id")
+                self.brain.db.has_item(user_id, title["shop_id"]) > 0
+                if isinstance(title.get("shop_id"), int)
+                and title["shop_id"] > 0
                 else is_unlocked(title, u, room_level)
             )
         }
@@ -165,6 +166,7 @@ class Inventory:
 
     async def cb_inv(self, query: CallbackQuery):
         user_id = query.from_user.id
+        user = self.brain.db.get_user(user_id)
 
         try:
             from item_system import get_total_effects
@@ -173,11 +175,12 @@ class Inventory:
             effects = {}
         effects_line = describe_effect_dict(effects)
 
-        text = (
+        body = (
             "🎒 <b>Инвентарь</b>\n\n"
             f"✨ <b>Активные эффекты:</b>\n<i>{effects_line}</i>\n\n"
             "Выбери раздел:"
         )
+        text = with_hero(body, user)
         sections = []
         if BADGES:
             sections.append(
@@ -196,7 +199,7 @@ class Inventory:
             sections.append(
                 [InlineKeyboardButton(text="🏷 Титулы", callback_data="inv_titles")]
             )
-        sections.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+        sections.append(nav_footer("inv"))
         kb = InlineKeyboardMarkup(inline_keyboard=sections)
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -227,7 +230,7 @@ class Inventory:
                 )
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")
-                ]])
+                ], nav_footer()])
             else:
                 lines = [prefix + "💰 <b>Продажа медалей</b>\n"]
                 buttons = []
@@ -251,6 +254,7 @@ class Inventory:
                 buttons.append([InlineKeyboardButton(
                     text="⬅️ Назад", callback_data="inv"
                 )])
+                buttons.append(nav_footer())
                 text = "\n".join(lines)
                 keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -290,6 +294,7 @@ class Inventory:
                 [InlineKeyboardButton(
                     text="❌ Отмена", callback_data="inv_sell"
                 )],
+                nav_footer(),
             ])
             await query.message.edit_text(
                 text, reply_markup=keyboard, parse_mode="HTML"
@@ -366,6 +371,7 @@ class Inventory:
             buttons.append([InlineKeyboardButton(
                 text="⬅️ Назад", callback_data="inv"
             )])
+            buttons.append(nav_footer())
             await query.message.edit_text(
                 text if not craftable else "\n".join(lines),
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
@@ -410,6 +416,7 @@ class Inventory:
                 [InlineKeyboardButton(
                     text="❌ Отмена", callback_data="inv_craft"
                 )],
+                nav_footer(),
             ])
             await query.message.edit_text(
                 text, reply_markup=keyboard, parse_mode="HTML"
@@ -467,6 +474,7 @@ class Inventory:
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")],
+                nav_footer(),
             ])
             try:
                 await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -518,6 +526,7 @@ class Inventory:
                 text=label, callback_data=f"inv_slot_{slot}"
             )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")])
+        buttons.append(nav_footer())
 
         try:
             await query.message.edit_text(
@@ -576,6 +585,7 @@ class Inventory:
             buttons.append([InlineKeyboardButton(
                 text="⬅️ Назад", callback_data="inv_badges"
             )])
+            buttons.append(nav_footer())
 
             info_text = f"🏅 <b>Ячейка {slot + 1}</b>\n\n"
             if current_bid and current_bid in BADGES:
@@ -636,6 +646,9 @@ class Inventory:
                 return
 
             self.brain.db.set_user_badge(user_id, slot, bid)
+            self.brain.db.log_event(
+                user_id, u["username"] or "", "equip_badge", f"{bid}|{slot}"
+            )
             await safe_answer(query, f"✅ Надето: {BADGES[bid]['name']}")
             query.data = f"inv_slot_{slot}"
             await self.cb_slot(query)
@@ -706,6 +719,7 @@ class Inventory:
                     callback_data="locked"
                 )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")])
+        buttons.append(nav_footer())
 
         try:
             await query.message.edit_text(

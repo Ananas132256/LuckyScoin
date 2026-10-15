@@ -9,7 +9,7 @@ from aiogram.types import (
 )
 
 from admin import is_admin
-from utils import safe_answer
+from utils import nav_footer, safe_answer
 
 
 STATUSES = {
@@ -90,6 +90,7 @@ class Complaints:
                 )
             ])
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+        rows.append(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def cb_complaint(self, query: CallbackQuery, state: FSMContext):
@@ -122,7 +123,7 @@ class Complaints:
             await state.set_state(ComplaintStates.waiting_for_text)
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="❌ Отмена", callback_data="complaint")
-            ]])
+            ], nav_footer()])
             await safe_answer(query)
             await self._edit(
                 query,
@@ -175,7 +176,7 @@ class Complaints:
                 text += f"\n\n💬 <b>Ответ:</b>\n{html.escape(complaint['answer'])}"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ Назад", callback_data="complaint")
-            ]])
+            ], nav_footer()])
             await self._edit(query, text, keyboard)
         except (TypeError, ValueError):
             await safe_answer(query, "Некорректный номер жалобы.", show_alert=True)
@@ -228,6 +229,7 @@ class Complaints:
             else:
                 text = f"📮 <b>Жалобы</b> — показано: {len(complaints)}"
             rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_refresh")])
+            rows.append(nav_footer())
             await self._edit(query, text, InlineKeyboardMarkup(inline_keyboard=rows))
         except Exception as error:
             print(f"⚠️ Ошибка списка жалоб для админа: {error}")
@@ -321,6 +323,7 @@ class Complaints:
             [InlineKeyboardButton(
                 text="⬅️ Назад", callback_data="admin_complaints"
             )],
+            nav_footer(),
         ])
         await self._edit(query, text, keyboard)
 
@@ -338,7 +341,7 @@ class Complaints:
                 InlineKeyboardButton(
                     text="❌ Отмена", callback_data=f"admin_complaint_{complaint_id}"
                 )
-            ]])
+            ], nav_footer()])
             await safe_answer(query)
             await self._edit(
                 query,

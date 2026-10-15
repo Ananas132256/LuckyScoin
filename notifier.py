@@ -18,6 +18,75 @@ async def notifier_loop(brain):
         await asyncio.sleep(CHECK_INTERVAL)
 
 
+async def season_loop(brain):
+    """Check hourly whether the active season should roll over."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _check_season(brain)
+        except Exception as error:
+            print(f"⚠️ season_loop error: {error}")
+        await asyncio.sleep(3600)
+
+
+async def _check_season(brain):
+    from config import SEASON_DURATION_DAYS, SEASON_REWARD_TICKETS
+
+    elapsed = brain.db.get_season_elapsed()
+    if elapsed <= 0:
+        return
+
+    threshold = SEASON_DURATION_DAYS * 86400
+    if elapsed < threshold:
+        return
+
+    top = brain.db.get_all_user_ids_sorted_by_lc(limit=3)
+    brain.db.start_new_season()
+    brain.db.reset_season_data()
+    new_num = brain.db.get_current_season()
+    brain.db.set_flag("season_current", str(new_num))
+
+    medals = ["🥇", "🥈", "🥉"]
+    reward_lines = []
+    for place, (user_id, username, lc) in enumerate(top, 1):
+        reward = SEASON_REWARD_TICKETS.get(place, 0)
+        if reward:
+            brain.db.grant_tickets_uncapped(user_id, reward)
+        name = f"@{username}" if username else f"id{user_id}"
+        reward_lines.append(
+            f"{medals[place - 1]} {name} — "
+            f"{lc:,} LC → 🎟 {reward}".replace(",", " ")
+        )
+
+    text_lines = [
+        "🏁 <b>Сезон завершён!</b>\n",
+        "Награды топ-3:",
+    ]
+    if reward_lines:
+        text_lines.extend(reward_lines)
+    else:
+        text_lines.append("<i>Никто не набрал LC.</i>")
+    text_lines.append(
+        "\n🎉 <b>Начинается новый сезон!</b>\n"
+        "LC, казино, статистика и серии сброшены. "
+        "Успей забраться на вершину первым!\n\n"
+        "<i>Уровень, SC, значки и инвентарь — навсегда "
+        "с тобой.</i>"
+    )
+    broadcast = "\n".join(text_lines)
+
+    for user_id in brain.db.get_all_user_ids():
+        try:
+            await brain.bot.send_message(
+                user_id, broadcast, parse_mode="HTML"
+            )
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    brain.db.log_admin(0, "auto_end_season", f"new={new_num}")
+
+
 async def _tick(brain):
     # Если идёт техперерыв — не спамим
     if brain.db.get_maintenance()["enabled"]:

@@ -309,7 +309,19 @@ def get_next_rarity(rarity: str) -> str:
     return RARITY_ORDER[min(idx + 1, len(RARITY_ORDER) - 1)]
 
 
-TITLES = {}
+# Title entries use the same shop metadata as badges; add new title
+# definitions here with a unique shop_id and their display fields.
+TITLES = {
+    "old": {
+        "shop_id": 100,
+        "name": "🧓 Старичок",
+        "desc": "Титул для тех, кто был здесь до 1.0.0. "
+                "Больше его не получить.",
+        "rarity": "legendary",
+        "price_sc": 0,
+        "limited": True,
+    },
+}
 
 
 # ============================================================

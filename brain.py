@@ -10,8 +10,8 @@ from trade import Trade
 from tycoon import Tycoon
 from inventory import Inventory
 from complaints import Complaints
-from middleware import MaintenanceMiddleware
-from notifier import notifier_loop
+from middleware import MaintenanceMiddleware, ActivityMiddleware
+from notifier import notifier_loop, season_loop
 from admin import ADMIN_IDS
 
 
@@ -31,8 +31,11 @@ class Brain:
 
     async def start(self):
         mw = MaintenanceMiddleware(self, ADMIN_IDS)
+        activity = ActivityMiddleware(self)
         self.dp.message.middleware(mw)
+        self.dp.message.middleware(activity)
         self.dp.callback_query.middleware(mw)
+        self.dp.callback_query.middleware(activity)
 
         self.menu.register(self.dp)
         self.game.register(self.dp)
@@ -44,5 +47,6 @@ class Brain:
         self.complaints.register(self.dp)
 
         asyncio.create_task(notifier_loop(self))
+        asyncio.create_task(season_loop(self))
 
         await self.dp.start_polling(self.bot)

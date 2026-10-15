@@ -3,7 +3,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from db import DB
-from utils import safe_answer
+from utils import is_current_screen, nav_footer, safe_answer, with_hero
 
 
 class TycoonStates(StatesGroup):
@@ -57,6 +57,11 @@ class Tycoon:
     # ---------- ОТКРЫТИЕ ----------
 
     async def cb_casino(self, query: CallbackQuery, state: FSMContext = None):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
+        if is_current_screen(query, "casino"):
+            return await safe_answer(query, "Уже здесь")
         await safe_answer(query)
         if state:
             await state.clear()
@@ -71,10 +76,41 @@ class Tycoon:
 
         await self._render_main(query, casino)
 
+    async def _show_under_construction(self, query):
+        from config import TYCOON_COMING_VERSION
+
+        await safe_answer(query)
+        text = (
+            "🚧 <b>Казино на реконструкции</b>\n\n"
+            "Мы полностью переделываем этот режим — он станет "
+            "интереснее, глубже и прибыльнее.\n\n"
+            f"⏳ Возвращение: <b>версия {TYCOON_COMING_VERSION}</b>\n\n"
+            "<b>Что нового:</b>\n"
+            "• 🏗 Расширенные залы с уникальными бонусами\n"
+            "• 👥 Сотрудники с навыками и уровнями\n"
+            "• 📅 Ежедневные задания и цели\n"
+            "• 🎁 Сезонные награды для владельцев\n\n"
+            "<i>Твои прошлые вложения сохраним — учтём их "
+            "при запуске.</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="⬅️ В меню",
+                callback_data="menu",
+            )
+        ]])
+        try:
+            await query.message.edit_text(
+                text, reply_markup=kb, parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
     # ---------- ГЛАВНЫЙ ЭКРАН ----------
 
     async def _render_main(self, query, casino):
         user_id = casino["user_id"]
+        user = self.brain.db.get_user(user_id)
         level = casino["level"]
         income = self.brain.db.get_income_per_hour(user_id)
         pending, elapsed, _ = self.brain.db.get_pending_income(user_id)
@@ -97,7 +133,7 @@ class Tycoon:
         rank = self.brain.db.get_casino_rank(user_id)
         rank_str = f"#{rank}" if rank else "—"
 
-        text = (
+        body = (
             f"🏢 <b>{casino['name']}</b>\n"
             f"🏅 Место в рейтинге: <b>{rank_str}</b>\n\n"
             f"⭐ Уровень: <b>{level} / 10</b>\n"
@@ -122,7 +158,10 @@ class Tycoon:
                 event_block = "\n🚨 <b>ОГРАБЛЕНИЕ!</b>\n<i>Воры в казино! Отбить?</i>"
                 event_kb.append([InlineKeyboardButton(text="🛡 Отбить", callback_data="tycoon_event_robbery")])
 
-        text += event_block
+        body += event_block
+        text = with_hero(
+            body, user, extra=f"  ·  🏢 {casino['name']}"
+        )
 
         buttons = []
         if pending > 0:
@@ -141,7 +180,7 @@ class Tycoon:
             InlineKeyboardButton(text="ℹ️ Инфо", callback_data="tycoon_info"),
             InlineKeyboardButton(text="✏️ Имя", callback_data="tycoon_rename"),
         ])
-        buttons.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu")])
+        buttons.append(nav_footer("casino"))
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
@@ -152,9 +191,15 @@ class Tycoon:
     # ---------- СОБРАТЬ ----------
 
     async def cb_collect(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         user_id = query.from_user.id
         collected = self.brain.db.collect_casino(user_id)
         if collected > 0:
+            self.brain.db.log_event(
+                user_id, "", "collect_casino", str(collected)
+            )
             await safe_answer(query, f"✅ Собрано {fmt_num(collected)} LC!", show_alert=True)
         else:
             await safe_answer(query, "Пока нечего собирать.", show_alert=True)
@@ -164,6 +209,9 @@ class Tycoon:
     # ---------- ПОМЕЩЕНИЯ ----------
 
     async def cb_rooms(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         await safe_answer(query)
         user_id = query.from_user.id
         opened = self.brain.db.get_rooms(user_id)
@@ -204,6 +252,7 @@ class Tycoon:
                 )])
 
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
+        buttons.append(nav_footer("casino"))
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
@@ -211,6 +260,9 @@ class Tycoon:
             pass
 
     async def cb_open_room(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         try:
             rid = int(query.data.replace("tycoon_open_", ""))
         except ValueError:
@@ -221,11 +273,17 @@ class Tycoon:
         await safe_answer(query, msg, show_alert=True)
 
         if ok:
+            self.brain.db.log_event(
+                user_id, "", "open_room", f"{rid}|{ROOMS[rid]['cost']}"
+            )
             await self.cb_rooms(query)
 
     # ---------- СОТРУДНИКИ ----------
 
     async def cb_staff(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         await safe_answer(query)
         user_id = query.from_user.id
         hired = self.brain.db.get_staff(user_id)
@@ -251,6 +309,7 @@ class Tycoon:
                 )])
 
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
+        buttons.append(nav_footer("casino"))
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
@@ -258,6 +317,9 @@ class Tycoon:
             pass
 
     async def cb_hire_staff(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         try:
             sid = int(query.data.replace("tycoon_hire_", ""))
         except ValueError:
@@ -268,15 +330,22 @@ class Tycoon:
         await safe_answer(query, msg, show_alert=True)
 
         if ok:
+            self.brain.db.log_event(
+                user_id, "", "hire_staff", f"{sid}|{STAFF[sid]['cost']}"
+            )
             await self.cb_staff(query)
 
     # ---------- СОБЫТИЯ ----------
 
     async def cb_event(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         event_type = query.data.replace("tycoon_event_", "")
         user_id = query.from_user.id
 
         ok, text = self.brain.db.resolve_event(user_id, event_type, "auto")
+        self.brain.db.log_event(user_id, "", "event_casino", f"{event_type}")
         await safe_answer(query, text, show_alert=True)
 
         casino = self.brain.db.get_casino(user_id)
@@ -285,6 +354,9 @@ class Tycoon:
     # ---------- ПЕРЕИМЕНОВАНИЕ ----------
 
     async def cb_rename_start(self, query: CallbackQuery, state: FSMContext):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         await safe_answer(query)
         await state.set_state(TycoonStates.waiting_for_name)
         casino = self.brain.db.get_casino(query.from_user.id)
@@ -296,7 +368,8 @@ class Tycoon:
             f"Чтобы отменить — <code>/cancel</code>."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="casino")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="casino")],
+            nav_footer("casino"),
         ])
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -321,6 +394,9 @@ class Tycoon:
     # ---------- ИНФО ----------
 
     async def cb_info(self, query: CallbackQuery):
+        from config import TYCOON_ENABLED
+        if not TYCOON_ENABLED:
+            return await self._show_under_construction(query)
         await safe_answer(query)
         user_id = query.from_user.id
         breakdown = self.brain.db.get_income_breakdown(user_id)
@@ -343,7 +419,8 @@ class Tycoon:
             f"• Итого: <b>{fmt_num(breakdown['total'])} LC/ч</b>"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")],
+            nav_footer("casino"),
         ])
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")

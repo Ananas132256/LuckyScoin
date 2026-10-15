@@ -45,3 +45,56 @@ class MaintenanceMiddleware(BaseMiddleware):
         elif isinstance(event, CallbackQuery):
             await event.answer("🛠 Идут техработы", show_alert=True)
         return  # не вызываем handler
+
+
+class ActivityMiddleware(BaseMiddleware):
+    """Lightweight screen tracker for callbacks and bot entry commands."""
+
+    SCREEN_BY_PREFIX = (
+        ("menu", "menu"),
+        ("play", "play"),
+        ("choose_", "play_bet"),
+        ("roulette", "play_roulette"),
+        ("exchange", "play_exchange"),
+        ("casino", "casino"),
+        ("tycoon_", "casino_tycoon"),
+        ("shop", "shop"),
+        ("trade", "trade"),
+        ("inv", "inv"),
+        ("top", "top"),
+        ("profile", "profile"),
+        ("settings", "settings"),
+        ("complaint", "complaint"),
+        ("admin_", "admin"),
+    )
+
+    def __init__(self, brain):
+        self.brain = brain
+
+    async def __call__(self, handler, event, data):
+        user = data.get("event_from_user")
+        if user is None:
+            return await handler(event, data)
+        try:
+            screen = self._detect_screen(event)
+            if screen:
+                self.brain.db.set_user_screen(user.id, screen)
+        except Exception as error:
+            try:
+                print(f"⚠️ ActivityMiddleware: {error}")
+            except Exception:
+                pass
+        return await handler(event, data)
+
+    def _detect_screen(self, event) -> str | None:
+        if isinstance(event, CallbackQuery):
+            callback_data = event.data or ""
+            for prefix, screen in self.SCREEN_BY_PREFIX:
+                if callback_data.startswith(prefix):
+                    return screen
+            return None
+        if isinstance(event, Message):
+            text = event.text or ""
+            if text.startswith("/start") or text.startswith("/menu"):
+                return "menu"
+        return None
