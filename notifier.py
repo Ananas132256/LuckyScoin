@@ -90,57 +90,60 @@ async def _check_season(brain):
 
 
 async def _tick(brain):
+    from config import TYCOON_ENABLED
+
     # Если идёт техперерыв — не спамим
     if brain.db.get_maintenance()["enabled"]:
         return
 
     now = int(time.time())
-    user_ids = brain.db.get_users_with_casino()
+    if TYCOON_ENABLED:
+        user_ids = brain.db.get_users_with_casino()
 
-    for uid in user_ids:
-        try:
-            casino = brain.db.get_casino(uid)
-            if not casino:
-                continue
+        for uid in user_ids:
+            try:
+                casino = brain.db.get_casino(uid)
+                if not casino:
+                    continue
 
-            auto_collected = brain.db.auto_collect_casino(uid)
-            if auto_collected is not None:
-                if auto_collected > 0:
+                auto_collected = brain.db.auto_collect_casino(uid)
+                if auto_collected is not None:
+                    if auto_collected > 0:
+                        await brain.bot.send_message(
+                            uid,
+                            f"💼 <b>Бухгалтер собрал доход казино!</b>\n\n"
+                            f"🏢 {casino['name']}\n"
+                            f"💰 Начислено: <b>{auto_collected} LC</b>",
+                            parse_mode="HTML"
+                        )
+                    continue
+
+                # Хранилище не заполнено — пропускаем
+                pending, elapsed, income = brain.db.get_pending_income(uid)
+                if elapsed < brain.db.CASINO_MAX_HOURS * 3600:
+                    continue
+
+                # Кулдаун: не чаще раза в 8 часов
+                last = brain.db.get_last_storage_notify(uid)
+                if now - last < NOTIFY_COOLDOWN:
+                    continue
+
+                # Отправляем
+                try:
                     await brain.bot.send_message(
                         uid,
-                        f"💼 <b>Бухгалтер собрал доход казино!</b>\n\n"
+                        f"📦 <b>Хранилище казино заполнено!</b>\n\n"
                         f"🏢 {casino['name']}\n"
-                        f"💰 Начислено: <b>{auto_collected} LC</b>",
+                        f"💰 Накоплено: <b>{pending} LC</b>\n\n"
+                        f"<i>Собери доход — иначе не копится дальше.</i>",
                         parse_mode="HTML"
                     )
-                continue
-
-            # Хранилище не заполнено — пропускаем
-            pending, elapsed, income = brain.db.get_pending_income(uid)
-            if elapsed < brain.db.CASINO_MAX_HOURS * 3600:
-                continue
-
-            # Кулдаун: не чаще раза в 8 часов
-            last = brain.db.get_last_storage_notify(uid)
-            if now - last < NOTIFY_COOLDOWN:
-                continue
-
-            # Отправляем
-            try:
-                await brain.bot.send_message(
-                    uid,
-                    f"📦 <b>Хранилище казино заполнено!</b>\n\n"
-                    f"🏢 {casino['name']}\n"
-                    f"💰 Накоплено: <b>{pending} LC</b>\n\n"
-                    f"<i>Собери доход — иначе не копится дальше.</i>",
-                    parse_mode="HTML"
-                )
-                brain.db.set_last_storage_notify(uid, now)
+                    brain.db.set_last_storage_notify(uid, now)
+                except Exception:
+                    # Юзер мог заблокировать бота — не страшно
+                    pass
             except Exception:
-                # Юзер мог заблокировать бота — не страшно
-                pass
-        except Exception:
-            continue
+                continue
 
     # Ежедневные награды доступны также игрокам без казино.
     if brain.db.get_maintenance()["enabled"]:
