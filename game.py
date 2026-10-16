@@ -850,9 +850,14 @@ class Game:
 
     async def _start_game(self, message: Message, spin_key: str, bet: int):
         user_id = message.from_user.id
+        if not self.brain.db.subtract_balance_if_available(user_id, "lc", bet):
+            balance = self.brain.db.get_balance(user_id, "lc")
+            await message.answer(
+                f"Недостаточно LC. У тебя {balance}."
+            )
+            return
         user = self.brain.db.get_user(user_id)
         username = user["username"] or ""
-        self.brain.db.add_balance(user_id, "lc", -bet)
 
         name, _, _, spin_mult = self.SPIN_TYPES[spin_key]
         game_title = (
@@ -1210,10 +1215,6 @@ class Game:
             return await message.answer(f"Введи число от {min_b} до {max_b}.")
         if not (min_b <= bet <= max_b):
             return await message.answer(f"Ставка от {min_b} до {max_b}.")
-        user_id = message.from_user.id
-        if self.brain.db.get_balance(user_id, "lc") < bet:
-            return await message.answer(
-                f"Недостаточно LC. У тебя {self.brain.db.get_balance(user_id, 'lc')}.")
         await state.clear()
         await self._start_game(message, spin_key, bet)
 

@@ -1,8 +1,31 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from game import Game
+
+
+class GameBalanceSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_game_rejects_bet_if_atomic_debit_fails(self):
+        game = Game.__new__(Game)
+        game.brain = SimpleNamespace(db=SimpleNamespace(
+            subtract_balance_if_available=Mock(return_value=False),
+            get_balance=Mock(return_value=5),
+            get_user=Mock(),
+        ))
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+        )
+
+        await game._start_game(message, "basic", 10)
+
+        game.brain.db.subtract_balance_if_available.assert_called_once_with(
+            1, "lc", 10
+        )
+        game.brain.db.get_user.assert_not_called()
+        message.answer.assert_awaited_once_with("Недостаточно LC. У тебя 5.")
 
 
 class AdvancedRerollTests(unittest.TestCase):
