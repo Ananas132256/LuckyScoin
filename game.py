@@ -69,7 +69,7 @@ class Game:
     #  НАСТРОЙКИ
     # ============================================================
     LEVEL_REQ = {
-        "common": 0, "uncommon": 6, "rare": 15, "ultra": 50, "epic": 100,
+        "common": 0, "uncommon": 6, "rare": 25, "ultra": 50, "epic": 100,
         "advanced": 12,
     }
     STICKY_CHANCE = 0.15
