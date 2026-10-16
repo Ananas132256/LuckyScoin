@@ -708,6 +708,21 @@ class DB:
         )
         self.conn.commit()
 
+    def subtract_balance_if_available(self, user_id, currency, amount) -> bool:
+        if currency not in ("sc", "lc"):
+            raise ValueError("Unsupported balance currency")
+        if amount < 0:
+            raise ValueError("Amount must not be negative")
+
+        self._ensure(user_id)
+        cur = self.conn.execute(
+            f"UPDATE users SET {currency} = {currency} - ? "
+            f"WHERE user_id=? AND {currency} >= ?",
+            (amount, user_id, amount),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
     def set_balance(self, user_id, currency, amount):
         self._ensure(user_id)
         self.conn.execute(f"UPDATE users SET {currency} = ? WHERE user_id=?", (amount, user_id))
@@ -1934,8 +1949,9 @@ class DB:
             )
         else:
             self.conn.execute(
-                "UPDATE users SET total_bets = total_bets + ?, total_lost = total_lost + ? WHERE user_id=?",
-                (bet, bet + abs(win_amount), user_id)
+                "UPDATE users SET total_bets = total_bets + ?, "
+                "total_lost = total_lost + ? WHERE user_id=?",
+                (bet, abs(win_amount), user_id)
             )
         self.conn.commit()
 

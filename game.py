@@ -122,7 +122,7 @@ class Game:
         "epic":     {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.50, "last_stop_delay": 3.00, "label": "👾"},
         "advanced": {
             "spin_frames": 3, "spin_delay": 1.10, "stop_delay": 1.10,
-            "last_stop_delay": 1.20, "fake_stops": 1, "label": "🎰",
+            "last_stop_delay": 1.20, "label": "🎰",
         },
     }
 
@@ -479,16 +479,31 @@ class Game:
         )
 
     async def _anim_spin(self, message, name, bet, cfg, final_symbols):
-        frame_specs = (
-            (0, "▶️ <i>Крутим...</i> ⏩⏩"),
-            (5, "▶️ <b>Стоп!</b>"),
-        )
-        for frozen_count, header in frame_specs:
+        for _ in range(cfg["spin_frames"]):
+            noise = " | ".join(random.choice(self.NOISE) for _ in range(5))
             await self._render(
-                message, name, bet,
-                self._spin_frame_display(final_symbols, frozen_count),
-                header,
+                message,
+                name,
+                bet,
+                noise,
+                f"{cfg['label']} <i>Крутим...</i>",
             )
+            await asyncio.sleep(cfg["spin_delay"])
+
+        for frozen_count in range(1, 6):
+            await self._render(
+                message,
+                name,
+                bet,
+                self._spin_frame_display(final_symbols, frozen_count),
+                f"{cfg['label']} <b>Стоп!</b> "
+                f"<code>{frozen_count}/5</code>",
+            )
+            delay = (
+                cfg["last_stop_delay"]
+                if frozen_count == 5 else cfg["stop_delay"]
+            )
+            await asyncio.sleep(delay)
 
     async def _anim_reveal(self, message, name, bet, symbols, cfg, header):
         await self._render(

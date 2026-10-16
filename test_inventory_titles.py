@@ -126,6 +126,22 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
             show_alert=True,
         )
 
+    async def test_badge_pick_rejects_level_locked_slot(self):
+        from cosmetics import BADGES
+
+        inventory = self.make_inventory(level=5)
+        inventory.brain.db.get_rooms = lambda user_id: []
+        query = FakeQuery(
+            data=f"inv_badge_pick_3_{next(iter(BADGES))}"
+        )
+
+        await inventory.cb_badge_pick(query)
+
+        query.answer.assert_awaited_once_with(
+            "Ячейка заблокирована.",
+            show_alert=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

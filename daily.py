@@ -89,7 +89,7 @@ class Daily:
 
     async def _safe_edit(self, message, text, **kwargs):
         async with self._edit_lock:
-            while True:
+            for attempt in range(3):
                 elapsed = time.time() - self._last_edit
                 if elapsed < 1.1:
                     await asyncio.sleep(1.1 - elapsed)
@@ -98,6 +98,12 @@ class Daily:
                     await message.edit_text(text, **kwargs)
                     return
                 except TelegramRetryAfter as error:
+                    if attempt == 2:
+                        print(
+                            "⚠️ Не удалось обновить экран ежедневной награды "
+                            "после трёх попыток."
+                        )
+                        return
                     elapsed = time.time() - self._last_edit
                     await asyncio.sleep(max(error.retry_after + 1, 1.1 - elapsed))
                 except TelegramBadRequest:

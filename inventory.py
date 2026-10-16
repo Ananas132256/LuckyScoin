@@ -648,6 +648,9 @@ class Inventory:
                 await safe_answer(query, "Значок не найден", show_alert=True)
                 return
             u, room_level = self._ctx(user_id)
+            if slot >= badge_slots_for_level(u["level"]):
+                await safe_answer(query, "Ячейка заблокирована.", show_alert=True)
+                return
             if bid not in self._owned_badges(u, room_level):
                 await safe_answer(query, "Значок ещё не открыт", show_alert=True)
                 return
