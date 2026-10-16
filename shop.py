@@ -56,7 +56,7 @@ class Shop:
                                   callback_data=f"shop_cat_{category}")]
             for category in sorted(categories - {"title", "badge"})
         )
-        buttons.append(nav_footer("shop"))
+        buttons.extend(nav_footer("shop"))
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     async def cb_shop(self, query: CallbackQuery, answer_query=True):
@@ -65,9 +65,9 @@ class Shop:
         user_id = query.from_user.id
         user = self.brain.db.get_user(user_id)
         if not SHOP_ENABLED:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                nav_footer("shop")
-            ])
+            buttons = []
+            buttons.extend(nav_footer("shop"))
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
             text = (
                 "🛒 <b>Магазин временно недоступен</b>\n\n"
                 "Мы обновляем ассортимент и улучшаем систему покупок.\n"
@@ -142,8 +142,7 @@ class Shop:
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ Назад", callback_data="shop")],
-                nav_footer("shop"),
-            ])
+            ] + nav_footer("shop"))
             try:
                 await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
             except Exception:
@@ -173,7 +172,7 @@ class Shop:
                     callback_data=f"shop_buy_{item_id}"
                 )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="shop")])
-        buttons.append(nav_footer("shop"))
+        buttons.extend(nav_footer("shop"))
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:

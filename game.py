@@ -1042,8 +1042,7 @@ class Game:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Ещё", callback_data=f"again_{spin_key}")],
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="play")],
-            nav_footer("play"),
-        ])
+        ] + nav_footer("play"))
         await self._safe_edit(msg, result, reply_markup=kb, parse_mode="HTML")
 
     # ---------- МЕНЮ ----------
@@ -1105,7 +1104,7 @@ class Game:
                 text="💱 Обменять LC на SC (комиссия 10%)",
                 callback_data="exchange",
             )])
-            buttons.append(nav_footer("play"))
+            buttons.extend(nav_footer("play"))
 
             await self._safe_edit(
                 query.message, text,
@@ -1141,8 +1140,8 @@ class Game:
                 f"Введи ставку в LC (от {min_b} до {max_b}).")
         keyboard_rows = [
             [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_bet")],
-            nav_footer("play"),
         ]
+        keyboard_rows.extend(nav_footer("play"))
         if spin_key == "advanced":
             keyboard_rows.insert(0, [InlineKeyboardButton(
                 text="📐 Свои паттерны", callback_data="advanced_patterns"
@@ -1223,8 +1222,7 @@ class Game:
             [InlineKeyboardButton(
                 text="🛒 Купить билет (5 SC)", callback_data="roulette_buy"
             )],
-            nav_footer("play"),
-        ])
+        ] + nav_footer("play"))
 
     async def cb_roulette(self, query: CallbackQuery, state: FSMContext):
         try:

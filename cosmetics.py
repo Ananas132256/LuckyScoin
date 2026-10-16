@@ -312,6 +312,48 @@ def get_next_rarity(rarity: str) -> str:
 # Title entries use the same shop metadata as badges; add new title
 # definitions here with a unique shop_id and their display fields.
 TITLES = {
+    "clover": {
+        "shop_id": 101,
+        "name": "🍀 Клевер",
+        "desc": "Просто красивый титул.",
+        "rarity": "common",
+        "price_sc": 50,
+    },
+    "diamond": {
+        "shop_id": 102,
+        "name": "💎 Бриллиант",
+        "desc": "Просто красивый титул.",
+        "rarity": "rare",
+        "price_sc": 300,
+    },
+    "fiery": {
+        "shop_id": 103,
+        "name": "🔥 Огненный",
+        "desc": "Просто красивый титул.",
+        "rarity": "rare",
+        "price_sc": 800,
+    },
+    "royal": {
+        "shop_id": 104,
+        "name": "👑 Королевский",
+        "desc": "Просто красивый титул.",
+        "rarity": "epic",
+        "price_sc": 2_000,
+    },
+    "lord": {
+        "shop_id": 105,
+        "name": "🎩 Лорд",
+        "desc": "Просто красивый титул.",
+        "rarity": "legendary",
+        "price_sc": 4_000,
+    },
+    "whale": {
+        "shop_id": 106,
+        "name": "🐋 Кит",
+        "desc": "Просто красивый титул.",
+        "rarity": "legendary",
+        "price_sc": 5_000,
+    },
     "old": {
         "shop_id": 100,
         "name": "🧓 Старичок",
@@ -322,6 +364,22 @@ TITLES = {
         "limited": True,
     },
 }
+
+LEVEL_TITLES = (
+    ("novice", "🎲 Новичок", 0, "common"),
+    ("lucky", "🍀 Везунчик", 5, "common"),
+    ("rich", "💎 Богач", 25, "rare"),
+    ("highroller", "🔥 Хайроллер", 50, "epic"),
+    ("legend", "👑 Легенда", 100, "legendary"),
+)
+
+
+def level_titles_for(level: int) -> list:
+    return [title for title in LEVEL_TITLES if level >= title[2]]
+
+
+def find_level_title(name: str):
+    return next((title for title in LEVEL_TITLES if title[1] == name), None)
 
 
 # ============================================================

@@ -150,15 +150,14 @@ class Menu:
                     line.append(InlineKeyboardButton(text=labels[key], callback_data=key))
             if line:
                 buttons.append(line)
-        buttons.append(nav_footer())
+        buttons.extend(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     def settings_keyboard(self):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Раскладка кнопок", callback_data="set_layout_menu")],
             [InlineKeyboardButton(text="⬅️ Назад",            callback_data="menu")],
-            nav_footer(),
-        ])
+        ] + nav_footer())
 
     def layout_keyboard(self, current):
         buttons = []
@@ -166,7 +165,7 @@ class Menu:
             mark = " ✅" if key == current else ""
             buttons.append([InlineKeyboardButton(text=data["name"] + mark, callback_data=f"set_layout_{key}")])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")])
-        buttons.append(nav_footer())
+        buttons.extend(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     async def _show_celebration(self, message: Message):
@@ -335,8 +334,7 @@ class Menu:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎰 Играть", callback_data="play")],
             [InlineKeyboardButton(text="⬅️ Назад",  callback_data="menu")],
-            nav_footer(),
-        ])
+        ] + nav_footer())
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML",
                                           disable_web_page_preview=True)
@@ -395,7 +393,7 @@ class Menu:
             buttons.append([InlineKeyboardButton(text="🏢 Открыть казино", callback_data="casino")])
         buttons.append([InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inv")])
         buttons.append([InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")])
-        buttons.append(nav_footer("profile"))
+        buttons.extend(nav_footer("profile"))
         try:
             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
         except Exception:
@@ -413,8 +411,7 @@ class Menu:
         return InlineKeyboardMarkup(inline_keyboard=[
             *[row for row in sort_rows if row],
             [InlineKeyboardButton(text="🏢 Топ казино", callback_data="top_casinos")],
-            nav_footer("top"),
-        ])
+        ] + nav_footer("top"))
 
     async def cb_top_casinos(self, query: CallbackQuery):
         await safe_answer(query)
@@ -449,8 +446,7 @@ class Menu:
                 text="⬅️ Назад",
                 callback_data=f"top_{next(iter(self.TOP_SORTS))}",
             )],
-            nav_footer("top"),
-        ])
+        ] + nav_footer("top"))
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
         except Exception:

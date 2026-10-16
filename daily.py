@@ -41,7 +41,7 @@ class Daily:
                     callback_data="daily_wheel",
                 )
             ])
-        rows.append(nav_footer())
+        rows.extend(nav_footer())
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _render(self, user_id, state, now):
@@ -214,9 +214,11 @@ class Daily:
             f"{escape(prize['symbol'])} {escape(localized_name)}\n"
             f"Награда: <b>{prize['lc_amount']:,} LC</b>"
         ).replace(",", " ")
+        buttons = []
+        buttons.extend(nav_footer())
         await self._safe_edit(
             query.message,
             result,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[nav_footer()]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
             parse_mode="HTML",
         )

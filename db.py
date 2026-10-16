@@ -104,7 +104,7 @@ class DB:
                 last_free_lc INTEGER DEFAULT 0,
                 tickets INTEGER DEFAULT 0,
                 layout TEXT DEFAULT 'classic',
-                title TEXT DEFAULT '',
+                title TEXT DEFAULT '🎲 Новичок',
                 streak INTEGER DEFAULT 0,
                 max_streak INTEGER DEFAULT 0,
                 total_bets INTEGER DEFAULT 0,
@@ -308,6 +308,7 @@ class DB:
         """)
 
         self._migrate()
+        self.recover_legacy_titles()
         self._init_items()
         self.conn.commit()
 
@@ -341,7 +342,7 @@ class DB:
             "last_free_lc":    "INTEGER DEFAULT 0",
             "tickets":         "INTEGER DEFAULT 0",
             "layout":          "TEXT DEFAULT 'classic'",
-            "title":           "TEXT DEFAULT ''",
+            "title":           "TEXT DEFAULT '🎲 Новичок'",
             "streak":          "INTEGER DEFAULT 0",
             "max_streak":      "INTEGER DEFAULT 0",
             "total_bets":      "INTEGER DEFAULT 0",
@@ -357,6 +358,13 @@ class DB:
         for col, definition in needed_users.items():
             if col not in existing_cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+
+        if self.get_flag("default_title_fixed") != "1":
+            self.conn.execute(
+                "UPDATE users SET title='🎲 Новичок' "
+                "WHERE title='' OR title IS NULL"
+            )
+            self.set_flag("default_title_fixed", "1")
 
         cur = self.conn.execute("PRAGMA table_info(inventory)")
         inventory_cols = {row[1] for row in cur.fetchall()}
@@ -422,6 +430,51 @@ class DB:
                 "ALTER TABLE user_badge_slot_state_new "
                 "RENAME TO user_badge_slot_state"
             )
+
+    def recover_legacy_titles(self) -> int:
+        flag_key = "legacy_titles_recovered"
+        if self.get_flag(flag_key) == "1":
+            return 0
+
+        legacy_title_ids = {
+            1: 101,
+            2: 102,
+            3: 103,
+            4: 104,
+            5: 106,
+            6: 105,
+        }
+        rows = self.conn.execute(
+            "SELECT inventory.user_id, inventory.item_id, inventory.quantity "
+            "FROM inventory "
+            "JOIN items ON items.item_id=inventory.item_id "
+            "WHERE inventory.item_id IN (1, 2, 3, 4, 5, 6) "
+            "AND items.category='title'"
+        ).fetchall()
+
+        for user_id, old_id, quantity in rows:
+            self.conn.execute(
+                "INSERT INTO inventory (user_id, item_id, quantity) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, item_id) DO UPDATE SET "
+                "quantity=inventory.quantity + excluded.quantity",
+                (user_id, legacy_title_ids[old_id], quantity),
+            )
+
+        self.conn.execute(
+            "DELETE FROM inventory "
+            "WHERE item_id IN (1, 2, 3, 4, 5, 6) "
+            "AND EXISTS ("
+            "SELECT 1 FROM items "
+            "WHERE items.item_id=inventory.item_id "
+            "AND items.category='title'"
+            ")"
+        )
+        self.set_flag(flag_key, "1")
+        self.conn.commit()
+        migrated_rows = len(rows)
+        print(f"Legacy titles recovered: {migrated_rows}")
+        return migrated_rows
 
     # ================= INIT ITEMS =================
 
@@ -636,7 +689,7 @@ class DB:
         return {
             "username": None, "sc": 0, "lc": 0,
             "wins": 0, "losses": 0, "games": 0,
-            "level": 0, "xp": 0, "layout": "classic", "title": "",
+            "level": 0, "xp": 0, "layout": "classic", "title": "🎲 Новичок",
             "streak": 0, "max_streak": 0, "total_bets": 0,
             "total_won": 0, "total_lost": 0,
             "overheat_score": 0, "last_spin_ts": 0,
@@ -818,7 +871,7 @@ class DB:
     def get_title(self, user_id):
         cur = self.conn.execute("SELECT title FROM users WHERE user_id=?", (user_id,))
         row = cur.fetchone()
-        return (row[0] if row else None) or ""
+        return (row[0] if row else None) or "🎲 Новичок"
 
     def set_title(self, user_id, title):
         self._ensure(user_id)

@@ -17,6 +17,9 @@ class DailyRewardTests(unittest.TestCase):
                 wheel_ts INTEGER DEFAULT 0
             )
         """)
+        self.db.conn.execute(
+            "CREATE TABLE users (user_id INTEGER PRIMARY KEY, title TEXT)"
+        )
 
     def tearDown(self):
         self.db.conn.close()
@@ -82,11 +85,36 @@ class DailyRewardTests(unittest.TestCase):
             (0, 0, 1_234_568),
         )
 
+    def test_default_user_and_empty_stored_title_use_novice_title(self):
+        self.db.conn.executemany(
+            "INSERT INTO users (user_id, title) VALUES (?, ?)",
+            [(42, ""), (43, None)],
+        )
+
+        self.assertEqual(
+            self.db._default_user_dict()["title"], "🎲 Новичок"
+        )
+        self.assertEqual(self.db.get_title(42), "🎲 Новичок")
+        self.assertEqual(self.db.get_title(43), "🎲 Новичок")
+        self.assertEqual(self.db.get_title(44), "🎲 Новичок")
+
     def test_migration_creates_daily_rewards_table_and_index(self):
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
         conn.executescript("""
-            CREATE TABLE users (user_id INTEGER PRIMARY KEY);
+            CREATE TABLE users (
+                user_id INTEGER PRIMARY KEY,
+                title TEXT DEFAULT ''
+            );
+            INSERT INTO users (user_id, title) VALUES
+                (1, ''),
+                (2, NULL),
+                (3, 'Custom title');
+            CREATE TABLE system_flags (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             CREATE TABLE inventory (
                 user_id INTEGER, item_id INTEGER, quantity INTEGER DEFAULT 1,
                 PRIMARY KEY (user_id, item_id)
@@ -117,6 +145,22 @@ class DailyRewardTests(unittest.TestCase):
             columns, {"user_id", "streak", "last_claim", "wheel_ts"}
         )
         self.assertIn("idx_daily_rewards_last_claim", indexes)
+        self.assertEqual(
+            conn.execute(
+                "SELECT user_id, title FROM users ORDER BY user_id"
+            ).fetchall(),
+            [
+                (1, "🎲 Новичок"),
+                (2, "🎲 Новичок"),
+                (3, "Custom title"),
+            ],
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT value FROM system_flags WHERE key='default_title_fixed'"
+            ).fetchone(),
+            ("1",),
+        )
 
 
 if __name__ == "__main__":

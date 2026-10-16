@@ -43,21 +43,28 @@ def with_hero(body: str, user: dict, extra: str = "") -> str:
     return f"{hero_card(user, extra)}\n\n{'─' * 16}\n\n{body}"
 
 
-def nav_footer(current: str | None = None) -> list[InlineKeyboardButton]:
-    """Return the standard one-row navigation footer."""
+def nav_footer(current: str | None = None) -> list[list[InlineKeyboardButton]]:
+    """Return footer rows; callers adding them to a keyboard must use .extend()."""
     destinations = (
         ("play", "🎰 Играть"),
         ("casino", "🏢 Казино"),
         ("top", "🏆 Топ"),
         ("profile", "👤 Профиль"),
     )
-    return [
+    destination_row = [
         InlineKeyboardButton(
             text=f"{label} ✓" if current == key else label,
             callback_data=key,
         )
         for key, label in destinations
     ]
+    menu_row = [
+        InlineKeyboardButton(
+            text="🏠 Главное меню",
+            callback_data="menu",
+        )
+    ]
+    return [destination_row, menu_row]
 
 
 def is_current_screen(query: CallbackQuery, screen: str) -> bool:

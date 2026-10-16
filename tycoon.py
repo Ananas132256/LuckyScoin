@@ -181,7 +181,7 @@ class Tycoon:
             InlineKeyboardButton(text="ℹ️ Инфо", callback_data="tycoon_info"),
             InlineKeyboardButton(text="✏️ Имя", callback_data="tycoon_rename"),
         ])
-        buttons.append(nav_footer("casino"))
+        buttons.extend(nav_footer("casino"))
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
@@ -253,7 +253,7 @@ class Tycoon:
                 )])
 
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
-        buttons.append(nav_footer("casino"))
+        buttons.extend(nav_footer("casino"))
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
@@ -310,7 +310,7 @@ class Tycoon:
                 )])
 
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")])
-        buttons.append(nav_footer("casino"))
+        buttons.extend(nav_footer("casino"))
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         try:
             await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
@@ -370,8 +370,7 @@ class Tycoon:
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="casino")],
-            nav_footer("casino"),
-        ])
+        ] + nav_footer("casino"))
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
@@ -421,8 +420,7 @@ class Tycoon:
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")],
-            nav_footer("casino"),
-        ])
+        ] + nav_footer("casino"))
         try:
             await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:

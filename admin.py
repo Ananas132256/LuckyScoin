@@ -505,7 +505,10 @@ class Admin:
                 InlineKeyboardButton(
                     text="⬅️ Назад", callback_data="admin_refresh"
                 ),
-            ]
+            ],
+            [InlineKeyboardButton(
+                text="🏠 Главное меню", callback_data="menu"
+            )],
         ])
 
     def _fmt_money(self, n) -> str:
