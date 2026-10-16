@@ -197,8 +197,8 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
         return f"💔 <b>{badge['name']}</b> сломался и пропал."
     if t == "GET_SC":
         amt = after.get("amount", 0)
-        brain.db.add_balance(user_id, "lc", amt)
-        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} LC."
+        brain.db.add_balance(user_id, "sc", amt)
+        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} SC."
     if t == "GET_LC":
         amt = after.get("amount", 0)
         brain.db.add_balance(user_id, "lc", amt)
@@ -216,6 +216,7 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
                     free_slot = i
                     break
             if free_slot is not None:
+                brain.db.add_item(user_id, BADGES[new_id]["shop_id"], 1)
                 brain.db.set_user_badge(user_id, free_slot, new_id)
                 return f"💔 <b>{badge['name']}</b> сломался! Взамен <b>{BADGES[new_id]['name']}</b>."
             else:

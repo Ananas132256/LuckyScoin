@@ -114,7 +114,7 @@ class Inventory:
         """Список ID медалей, которых в инвентаре есть минимум две."""
         return [
             item_id
-            for item_id, _, _, _, category in self.brain.db.get_inventory(user_id)
+            for item_id, _, _, _, category, _ in self.brain.db.get_inventory(user_id)
             if category == "badge"
             and self._available_badge_quantity(user_id, item_id) >= 2
             and (badge := self._badge_by_shop_id(item_id)[1])
@@ -217,10 +217,15 @@ class Inventory:
                 if row[4] == "badge"
             ]
             available_inventory = []
-            for item_id, _, name, _, _ in inventory:
+            for item_id, quantity, name, _, _, soulbound in inventory:
+                if soulbound:
+                    available_inventory.append(
+                        (item_id, quantity, name, True)
+                    )
+                    continue
                 quantity = self._available_badge_quantity(user_id, item_id)
                 if quantity > 0:
-                    available_inventory.append((item_id, quantity, name))
+                    available_inventory.append((item_id, quantity, name, False))
             prefix = f"{notice}\n\n" if notice else ""
             if not available_inventory:
                 text = (
@@ -234,10 +239,15 @@ class Inventory:
             else:
                 lines = [prefix + "💰 <b>Продажа медалей</b>\n"]
                 buttons = []
-                for item_id, quantity, name in available_inventory:
+                for item_id, quantity, name, soulbound in available_inventory:
                     _, badge = self._badge_by_shop_id(item_id)
                     price = badge.get("price_sc", 0) if badge else 0
-                    if price > 0:
+                    if soulbound:
+                        lines.append(
+                            f"{html.escape(name)} ×{quantity} "
+                            "🔒 не продаётся"
+                        )
+                    elif price > 0:
                         sale_price = max(1, price // 2)
                         lines.append(
                             f"{html.escape(name)} ×{quantity} "
@@ -249,7 +259,8 @@ class Inventory:
                         )])
                     else:
                         lines.append(
-                            f"{html.escape(name)} ×{quantity} (не продаётся)"
+                            f"{html.escape(name)} ×{quantity} "
+                            "🔒 не продаётся"
                         )
                 buttons.append([InlineKeyboardButton(
                     text="⬅️ Назад", callback_data="inv"
@@ -272,6 +283,18 @@ class Inventory:
         try:
             item_id = int(query.data.removeprefix("inv_sell_"))
             user_id = query.from_user.id
+            inventory_item = next(
+                (
+                    row for row in self.brain.db.get_inventory(user_id)
+                    if row[0] == item_id and row[4] == "badge"
+                ),
+                None,
+            )
+            if not inventory_item or inventory_item[5]:
+                await safe_answer(
+                    query, "🔒 Этот значок нельзя продать.", show_alert=True
+                )
+                return
             _, badge = self._badge_by_shop_id(item_id)
             if not badge or self._available_badge_quantity(user_id, item_id) < 1:
                 await safe_answer(query, "Значка нет в инвентаре.", show_alert=True)
@@ -308,6 +331,18 @@ class Inventory:
         try:
             item_id = int(query.data.removeprefix("inv_sell_confirm_"))
             user_id = query.from_user.id
+            inventory_item = next(
+                (
+                    row for row in self.brain.db.get_inventory(user_id)
+                    if row[0] == item_id and row[4] == "badge"
+                ),
+                None,
+            )
+            if not inventory_item or inventory_item[5]:
+                await safe_answer(
+                    query, "🔒 Этот значок нельзя продать.", show_alert=True
+                )
+                return
             _, badge = self._badge_by_shop_id(item_id)
             if not badge or self._available_badge_quantity(user_id, item_id) < 1:
                 await safe_answer(query, "Значка больше нет в инвентаре.", show_alert=True)

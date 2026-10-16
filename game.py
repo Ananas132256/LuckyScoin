@@ -164,6 +164,7 @@ class Game:
         self.brain = brain
         self._last_edit = 0
         self._edit_lock = asyncio.Lock()
+        self._exchange_cooldowns = {}
 
     def register(self, dp: Dispatcher):
         dp.callback_query(F.data == "play")(self.cb_play)
@@ -228,7 +229,7 @@ class Game:
                 return None
 
             # Сначала сохраняем медаль в инвентаре, чтобы она не потерялась.
-            self.brain.db.add_item(user_id, shop_id, 1)
+            self.brain.db.add_item(user_id, shop_id, 1, soulbound=True)
 
             level = self.brain.db.get_user(user_id)["level"]
             max_slots = badge_slots_for_level(level)
@@ -368,11 +369,13 @@ class Game:
         if "🔥" not in symbols:
             for pattern in self.PATTERNS:
                 if _match_pattern(symbols, pattern["pattern"]):
+                    action = pattern.get("action")
+                    won = action == "win"
                     return {
-                        "won": True,
-                        "mult": float(pattern.get("mult", 1)),
+                        "won": won,
+                        "mult": float(pattern["mult"]) if won else 0.0,
                         "desc": pattern.get("name", "Особый паттерн"),
-                        "unstable": False,
+                        "unstable": action == "reroll",
                         "item": False,
                     }
 
@@ -392,7 +395,10 @@ class Game:
             result["mult"] for result in line_results if result["won"]
         )
         line_bonus = 4 if lines_won == 3 else 2 if lines_won == 2 else 1
-        reroll_grid = all(result["unstable"] for result in line_results)
+        reroll_grid = (
+            all(result["unstable"] for result in line_results)
+            and not any(result["won"] for result in line_results)
+        )
         if reroll_grid:
             action = "reroll"
         elif lines_won:
@@ -401,7 +407,7 @@ class Game:
             action = "loss"
         return {
             "action": action,
-            "total_mult": multiplier_sum * line_bonus,
+            "total_mult": 0.0 if reroll_grid else multiplier_sum * line_bonus,
             "lines_won": lines_won,
             "descriptions": [result["desc"] for result in line_results],
             "reroll_grid": reroll_grid,
@@ -667,14 +673,25 @@ class Game:
     async def _resolve_advanced(self, message, bet, user_id, cfg, effects, stage):
         name = "Продвинутое казино"
         reroll_count = 0
+        accumulated_mult = 0.0
         while True:
             grid = self._spin_grid(reroll_count, effects, stage)
             await self._anim_reveal_grid(message, name, bet, grid, cfg)
             verdict = self._evaluate_grid(grid, effects)
 
-            if verdict["reroll_grid"] and reroll_count < self.MAX_REROLLS:
-                reroll_count += 1
-                continue
+            if verdict["reroll_grid"]:
+                if reroll_count < self.MAX_REROLLS:
+                    accumulated_mult += verdict["total_mult"]
+                    reroll_count += 1
+                    continue
+
+                # A grid still rerolling at the cap is a loss, never a payout.
+                verdict["action"] = "loss"
+                verdict["total_mult"] = 0.0
+                verdict["is_item"] = False
+                verdict["reroll_grid"] = False
+            else:
+                verdict["total_mult"] += accumulated_mult
             break
 
         return (
@@ -1036,14 +1053,7 @@ class Game:
             if state:
                 await state.clear()
             user_id = query.from_user.id
-            last_free = self.brain.db.get_last_free_lc(user_id)
             tickets = self.brain.db.get_tickets(user_id)
-            free_ticket_awarded = False
-            if time.time() - last_free >= 3600 and tickets < self.MAX_TICKETS:
-                self.brain.db.add_tickets(user_id, 1)
-                self.brain.db.set_last_free_lc(user_id, int(time.time()))
-                tickets = self.brain.db.get_tickets(user_id)
-                free_ticket_awarded = True
 
             user = self.brain.db.get_user(user_id)
             level = user["level"]
@@ -1066,9 +1076,7 @@ class Game:
                     f"🔥 Перегрев: {oh_icon} <code>({oh_score}/100)</code>"
                     f"{eff_line}\n\n"
                     f"Выбери тип крутки:")
-            if free_ticket_awarded:
-                body += "\n\n🎁 Получен бесплатный билет на рулетку!"
-            elif tickets >= self.MAX_TICKETS:
+            if tickets >= self.MAX_TICKETS:
                 body += "\n\n🎟 Максимум билетиков на руках."
             text = with_hero(body, user)
 
@@ -1091,7 +1099,10 @@ class Game:
                 text=f"🎟 Рулетка ({tickets} билетов)",
                 callback_data="roulette",
             )])
-            buttons.append([InlineKeyboardButton(text="💱 Обменять LC на SC", callback_data="exchange")])
+            buttons.append([InlineKeyboardButton(
+                text="💱 Обменять LC на SC (комиссия 10%)",
+                callback_data="exchange",
+            )])
             buttons.append(nav_footer("play"))
 
             await self._safe_edit(
@@ -1368,12 +1379,31 @@ class Game:
 
     async def cb_exchange(self, query: CallbackQuery):
         user_id = query.from_user.id
+        now = time.time()
+        cooldown_until = self._exchange_cooldowns.get(user_id, 0)
+        if now < cooldown_until:
+            remaining = math.ceil(cooldown_until - now)
+            return await query.answer(
+                f"⏳ Повтори обмен через {remaining} сек.",
+                show_alert=True,
+            )
+
         lc = self.brain.db.get_balance(user_id, "lc")
         if lc < 1000:
             return await query.answer("Нужно минимум 1000 LC.", show_alert=True)
         amount = (lc // 1000) * 1000
-        sc = amount // 1000
+        sc = max(1, ((amount // 1000) * 9) // 10)
         self.brain.db.add_balance(user_id, "lc", -amount)
         self.brain.db.add_balance(user_id, "sc", sc)
-        await query.answer(f"💱 {amount} LC → {sc} SC!", show_alert=True)
+        self.brain.db.log_event(
+            user_id,
+            query.from_user.username or "",
+            "exchange",
+            f"{amount}|{sc}",
+        )
+        self._exchange_cooldowns[user_id] = now + 60
+        await query.answer(
+            f"💱 Списано {amount:,} LC (комиссия 10%) → +{sc:,} SC".replace(",", " "),
+            show_alert=True,
+        )
         await self.cb_play(query)

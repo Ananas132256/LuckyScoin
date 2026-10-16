@@ -170,7 +170,8 @@ class DB:
                 pending_event TEXT DEFAULT NULL,
                 event_expires INTEGER DEFAULT 0,
                 last_event INTEGER DEFAULT 0,
-                last_storage_notify INTEGER DEFAULT 0
+                last_storage_notify INTEGER DEFAULT 0,
+                last_sc_fee INTEGER DEFAULT 0
             )
         """)
         self.conn.execute("""
@@ -343,6 +344,13 @@ class DB:
             if col not in existing_cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
 
+        cur = self.conn.execute("PRAGMA table_info(inventory)")
+        inventory_cols = {row[1] for row in cur.fetchall()}
+        if "soulbound" not in inventory_cols:
+            self.conn.execute(
+                "ALTER TABLE inventory ADD COLUMN soulbound INTEGER DEFAULT 0"
+            )
+
         cur = self.conn.execute("PRAGMA table_info(casinos)")
         casino_cols = {row[1] for row in cur.fetchall()}
         needed_casino = {
@@ -351,6 +359,7 @@ class DB:
             "last_event":          "INTEGER DEFAULT 0",
             "total_earned":        "INTEGER DEFAULT 0",
             "last_storage_notify": "INTEGER DEFAULT 0",
+            "last_sc_fee":         "INTEGER DEFAULT 0",
         }
         for col, definition in needed_casino.items():
             if col not in casino_cols:
@@ -805,11 +814,14 @@ class DB:
         row = cur.fetchone()
         return row[0] if row else 0
 
-    def add_item(self, user_id, item_id, qty=1):
+    def add_item(self, user_id, item_id, qty=1, soulbound: bool = False):
         self.conn.execute(
-            "INSERT INTO inventory (user_id, item_id, quantity) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + ?",
-            (user_id, item_id, qty, qty)
+            "INSERT INTO inventory "
+            "(user_id, item_id, quantity, soulbound) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, item_id) DO UPDATE SET "
+            "quantity = quantity + ?, "
+            "soulbound = MAX(COALESCE(inventory.soulbound, 0), excluded.soulbound)",
+            (user_id, item_id, qty, int(soulbound), qty)
         )
         self.conn.commit()
 
@@ -834,7 +846,8 @@ class DB:
 
     def get_inventory(self, user_id):
         cur = self.conn.execute(
-            "SELECT items.item_id, inventory.quantity, items.name, items.rarity, items.category "
+            "SELECT items.item_id, inventory.quantity, items.name, items.rarity, "
+            "items.category, inventory.soulbound "
             "FROM inventory JOIN items ON inventory.item_id = items.item_id "
             "WHERE inventory.user_id=? ORDER BY items.category, items.price_sc DESC",
             (user_id,)
@@ -1041,9 +1054,10 @@ class DB:
     def create_casino(self, user_id):
         now = int(time.time())
         self.conn.execute(
-            "INSERT OR IGNORE INTO casinos (user_id, name, last_collect, total_earned, last_event) "
-            "VALUES (?, 'Моё казино', ?, 0, ?)",
-            (user_id, now, now)
+            "INSERT OR IGNORE INTO casinos "
+            "(user_id, name, last_collect, total_earned, last_event, last_sc_fee) "
+            "VALUES (?, 'Моё казино', ?, 0, ?, ?)",
+            (user_id, now, now, now)
         )
         self.conn.commit()
         self.open_room(user_id, 1)
@@ -1153,12 +1167,29 @@ class DB:
 
     def collect_casino(self, user_id):
         pending, _, _ = self.get_pending_income(user_id)
+        now = int(time.time())
+        row = self.conn.execute(
+            "SELECT last_sc_fee FROM casinos WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if row and now - (row[0] or 0) >= 24 * 3600:
+            sc_balance = self.get_balance(user_id, "sc")
+            sc_burned = min(max(sc_balance, 0), 1)
+            if sc_burned:
+                self.add_balance(user_id, "sc", -sc_burned)
+            self.conn.execute(
+                "UPDATE casinos SET last_sc_fee=? WHERE user_id=?",
+                (now, user_id)
+            )
+            self.conn.commit()
+            self.log_event(user_id, "", "casino_fee", str(sc_burned))
+
         if pending <= 0:
             return 0
         self.add_balance(user_id, "lc", pending)
         self.conn.execute(
             "UPDATE casinos SET last_collect=?, total_earned = total_earned + ? WHERE user_id=?",
-            (int(time.time()), pending, user_id)
+            (now, pending, user_id)
         )
         self.conn.commit()
         return pending

@@ -139,6 +139,7 @@ class Tycoon:
             f"⭐ Уровень: <b>{level} / 10</b>\n"
             f"💵 Доход: <b>{fmt_num(income)} LC/час</b>\n"
             f"💼 Всего заработано: <b>{fmt_num(casino['total_earned'])} LC</b>\n\n"
+            f"🏦 Обслуживание: <b>1 SC/сутки</b>\n\n"
             f"💰 <b>Накоплено: {fmt_num(pending)} LC</b>\n"
             f"{storage_line}\n"
             f"{hint}\n"
