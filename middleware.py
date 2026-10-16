@@ -65,6 +65,7 @@ class ActivityMiddleware(BaseMiddleware):
         ("profile", "profile"),
         ("settings", "settings"),
         ("complaint", "complaint"),
+        ("daily", "daily"),
         ("admin_", "admin"),
     )
 

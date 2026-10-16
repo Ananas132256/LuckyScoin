@@ -2,6 +2,8 @@
 
 Update-related constants live here so that a version bump only
 touches this file. Do not commit secrets here.
+
+DAILY_WHEEL_PRIZES EV must stay below 1000 LC to avoid inflation.
 """
 
 # === 1.0.0 UPDATE ===
@@ -29,6 +31,35 @@ CONVERSION_TIERS = [
     (100_000, 500),
     (None,    5_000),
 ]
+
+# === DAILY REWARDS ===
+
+# Each tuple: (day_index, LC amount). Day 7 also guarantees a wheel spin.
+DAILY_REWARDS = [
+    (1, 50),
+    (2, 100),
+    (3, 200),
+    (4, 350),
+    (5, 500),
+    (6, 750),
+    (7, 1_500),
+]
+
+# Chance for a wheel spin on any non-final day.
+DAILY_WHEEL_CHANCE = 0.15
+
+# Minimum time between wheel spins for a player.
+DAILY_WHEEL_COOLDOWN_SECONDS = 12 * 3600
+
+# Each dict contains the wheel symbol, display name, chance percentage,
+# and LC prize amount. Chances must total 100.
+DAILY_WHEEL_PRIZES = (
+    {"symbol": "🥉", "name": "Bronze",  "chance": 35, "lc_amount": 100},
+    {"symbol": "🥈", "name": "Silver",  "chance": 30, "lc_amount": 250},
+    {"symbol": "🥇", "name": "Gold",    "chance": 20, "lc_amount": 500},
+    {"symbol": "💎", "name": "Diamond", "chance": 10, "lc_amount": 1_500},
+    {"symbol": "👑", "name": "Crown",   "chance": 5,  "lc_amount": 5_000},
+)
 
 # === SEASONS ===
 

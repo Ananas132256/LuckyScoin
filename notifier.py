@@ -1,6 +1,8 @@
 import asyncio
 import time
 
+from admin import is_admin
+
 
 CHECK_INTERVAL = 1800          # 30 минут
 NOTIFY_COOLDOWN = 8 * 3600     # не чаще раза в 8 часов одному юзеру
@@ -139,3 +141,30 @@ async def _tick(brain):
                 pass
         except Exception:
             continue
+
+    # Ежедневные награды доступны также игрокам без казино.
+    if brain.db.get_maintenance()["enabled"]:
+        return
+
+    for uid in brain.db.get_all_user_ids():
+        if is_admin(uid, brain.db):
+            continue
+
+        state = brain.db.get_daily_state(uid)
+        if not state["can_claim"]:
+            continue
+
+        flag_key = f"daily_nudge_ts:{uid}"
+        last_nudge = int(brain.db.get_flag(flag_key, 0))
+        if now - last_nudge < 20 * 3600:
+            continue
+
+        try:
+            await brain.bot.send_message(
+                uid,
+                "🎁 Твоя ежедневная награда готова!\n"
+                "Заходи и забери LC — серия растёт каждый день."
+            )
+        except Exception:
+            continue
+        brain.db.set_flag(flag_key, str(now))

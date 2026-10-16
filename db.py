@@ -314,6 +314,19 @@ class DB:
     # ================= MIGRATE =================
 
     def _migrate(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_rewards (
+                user_id INTEGER PRIMARY KEY,
+                streak INTEGER DEFAULT 0,
+                last_claim INTEGER DEFAULT 0,
+                wheel_ts INTEGER DEFAULT 0
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_daily_rewards_last_claim
+            ON daily_rewards (last_claim)
+        """)
+
         cur = self.conn.execute("PRAGMA table_info(users)")
         existing_cols = {row[1] for row in cur.fetchall()}
         needed_users = {
@@ -681,6 +694,48 @@ class DB:
             "overheat_score": overheat_score or 0,
             "last_spin_ts": last_spin_ts or 0,
         }
+
+    def get_daily_state(self, user_id) -> dict:
+        now = int(time.time())
+        row = self.conn.execute(
+            "SELECT streak, last_claim, wheel_ts "
+            "FROM daily_rewards WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if row is None:
+            streak, last_claim, wheel_ts = 0, 0, 0
+        else:
+            streak, last_claim, wheel_ts = row
+
+        return {
+            "streak": streak,
+            "last_claim": last_claim,
+            "wheel_ts": wheel_ts,
+            "can_claim": last_claim == 0 or now - last_claim >= 24 * 3600,
+            "next_claim_at": last_claim + 24 * 3600 if last_claim else now,
+            "streak_lost": now - last_claim >= 48 * 3600 and streak > 0,
+        }
+
+    def claim_daily(self, user_id, new_streak) -> bool:
+        now = int(time.time())
+        cur = self.conn.execute(
+            "INSERT INTO daily_rewards (user_id, streak, last_claim) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "streak=excluded.streak, last_claim=excluded.last_claim "
+            "WHERE daily_rewards.last_claim=0 OR daily_rewards.last_claim<=?",
+            (user_id, new_streak, now, now - 24 * 3600)
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def record_wheel_spin(self, user_id) -> None:
+        self.conn.execute(
+            "INSERT INTO daily_rewards (user_id, wheel_ts) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET wheel_ts=excluded.wheel_ts",
+            (user_id, int(time.time()))
+        )
+        self.conn.commit()
 
     # ================= УРОВНИ / XP =================
 
@@ -2187,7 +2242,8 @@ class DB:
             "substr(payload, 1, instr(payload || '|', '|') - 1) AS item_label, "
             "COUNT(*) "
             "FROM events "
-            "WHERE event_type IN ('buy_badge', 'buy_title', 'open_room', 'hire_staff') "
+            "WHERE event_type IN "
+            "('buy_badge', 'buy_title', 'open_room', 'hire_staff', 'daily_wheel') "
             "AND created_at>=? "
             "GROUP BY event_type, "
             "substr(payload, 1, instr(payload || '|', '|') - 1) "

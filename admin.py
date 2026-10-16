@@ -35,6 +35,8 @@ EVENT_STYLE = {
     "exchange":       ("💱", "обмен"),
     "trade":          ("💱", "трейд"),
     "level_up":       ("⭐", "новый уровень"),
+    "daily_claim":    ("🎁", "дейли"),
+    "daily_wheel":    ("🎡", "колесо"),
 }
 
 
@@ -665,6 +667,7 @@ class Admin:
                 "buy_title": "🏷",
                 "open_room": "🏗",
                 "hire_staff": "👔",
+                "daily_wheel": "🎡",
             }
             for item_label, count in purchases:
                 event_type, _, item_name = item_label.partition(":")

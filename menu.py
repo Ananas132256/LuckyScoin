@@ -8,6 +8,7 @@ import time
 
 BUTTONS = {
     "play":     "🎰 Играть",
+    "daily":    "🎁 Ежедневно",
     "casino":   "🏢 Моё казино",
     "shop":     "🛒 Магазин",
     "trade":    "💱 Трейд",
@@ -24,6 +25,7 @@ LAYOUTS = {
         "name": "🎰 Классика",
         "rows": [
             ["play"],
+            ["daily"],
             ["casino", "shop"],
             ["trade", "profile"],
             ["top", "inv"],
@@ -34,7 +36,8 @@ LAYOUTS = {
     "compact": {
         "name": "📦 Компакт",
         "rows": [
-            ["play", "casino"],
+            ["play"],
+            ["daily", "casino"],
             ["shop", "trade"],
             ["profile", "inv"],
             ["top", "about"],
@@ -271,6 +274,9 @@ class Menu:
             await self._show_celebration(message)
             return
         text = self._menu_text(user_id)
+        state = self.brain.db.get_daily_state(user_id)
+        if state["can_claim"]:
+            text = "🎁 <b>Ежедневная награда ждёт!</b>\n\n" + text
         await message.answer(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
 
     async def cmd_version(self, message: Message):
@@ -291,6 +297,9 @@ class Menu:
             await self._show_celebration(query.message)
             return
         text = self._menu_text(user_id)
+        state = self.brain.db.get_daily_state(user_id)
+        if state["can_claim"]:
+            text = "🎁 <b>Ежедневная награда ждёт!</b>\n\n" + text
         try:
             await query.message.edit_text(text, reply_markup=self.main_keyboard(user_id), parse_mode="HTML")
         except Exception:

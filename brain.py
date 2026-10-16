@@ -10,6 +10,7 @@ from trade import Trade
 from tycoon import Tycoon
 from inventory import Inventory
 from complaints import Complaints
+from daily import Daily
 from middleware import MaintenanceMiddleware, ActivityMiddleware
 from notifier import notifier_loop, season_loop
 from admin import ADMIN_IDS
@@ -28,6 +29,7 @@ class Brain:
         self.tycoon = Tycoon(self)
         self.inventory = Inventory(self)
         self.complaints = Complaints(self)
+        self.daily = Daily(self)
 
     async def start(self):
         mw = MaintenanceMiddleware(self, ADMIN_IDS)
@@ -45,6 +47,7 @@ class Brain:
         self.tycoon.register(self.dp)
         self.inventory.register(self.dp)
         self.complaints.register(self.dp)
+        self.daily.register(self.dp)
 
         asyncio.create_task(notifier_loop(self))
         asyncio.create_task(season_loop(self))
