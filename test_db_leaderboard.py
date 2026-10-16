@@ -10,17 +10,17 @@ class UserRankTests(unittest.TestCase):
         self.db.conn = sqlite3.connect(":memory:")
         self.db.conn.execute(
             "CREATE TABLE users ("
-            "user_id INTEGER PRIMARY KEY, sc INTEGER, lc INTEGER, "
-            "level INTEGER, games INTEGER, wins INTEGER)"
+            "user_id INTEGER PRIMARY KEY, username TEXT, sc INTEGER, lc INTEGER, "
+            "level INTEGER, games INTEGER, wins INTEGER, title TEXT DEFAULT '')"
         )
         self.db.conn.executemany(
-            "INSERT INTO users (user_id, sc, lc, level, games, wins) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (user_id, username, sc, lc, level, games, wins, title) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (10, 100, 500, 5, 20, 15),
-                (20, 100, 700, 6, 10, 8),
-                (30, 50, 900, 6, 10, 8),
-                (40, 0, 1000, 1, 5, 4),
+                (10, "vasya", 100, 500, 5, 20, 15, "🎲 Новичок"),
+                (20, "petya", 100, 700, 6, 10, 8, "🍀 Везунчик"),
+                (30, "masha", 50, 900, 6, 10, 7, ""),
+                (40, "ivan", 0, 1000, 1, 5, 4, ""),
             ],
         )
 
@@ -44,6 +44,22 @@ class UserRankTests(unittest.TestCase):
 
     def test_winrate_rank_returns_none_below_minimum_games(self):
         self.assertIsNone(self.db.get_user_rank_winrate(40))
+
+    def test_leaderboards_include_player_titles(self):
+        self.assertEqual(
+            self.db.top_by("sc", 2),
+            [
+                ("vasya", 10, 100, "🎲 Новичок"),
+                ("petya", 20, 100, "🍀 Везунчик"),
+            ],
+        )
+        self.assertEqual(
+            self.db.top_winrate(2),
+            [
+                ("petya", 20, 8, 10, 80.0, "🍀 Везунчик"),
+                ("vasya", 10, 15, 20, 75.0, "🎲 Новичок"),
+            ],
+        )
 
 
 if __name__ == "__main__":

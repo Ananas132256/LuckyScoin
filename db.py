@@ -94,8 +94,8 @@ class DB:
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
-                sc INTEGER DEFAULT 0,
-                lc INTEGER DEFAULT 15,
+                sc REAL DEFAULT 0.0,
+                lc INTEGER DEFAULT 25,
                 wins INTEGER DEFAULT 0,
                 losses INTEGER DEFAULT 0,
                 games INTEGER DEFAULT 0,
@@ -332,8 +332,8 @@ class DB:
         existing_cols = {row[1] for row in cur.fetchall()}
         needed_users = {
             "username":        "TEXT",
-            "sc":              "INTEGER DEFAULT 0",
-            "lc":              "INTEGER DEFAULT 15",
+            "sc":              "REAL DEFAULT 0.0",
+            "lc":              "INTEGER DEFAULT 25",
             "wins":            "INTEGER DEFAULT 0",
             "losses":          "INTEGER DEFAULT 0",
             "games":           "INTEGER DEFAULT 0",
@@ -668,7 +668,10 @@ class DB:
         self.conn.commit()
 
     def _ensure(self, user_id):
-        self.conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        self.conn.execute(
+            "INSERT OR IGNORE INTO users (user_id, lc) VALUES (?, 25)",
+            (user_id,),
+        )
         self.conn.commit()
 
     # ================= ЮЗЕР =================
@@ -687,7 +690,7 @@ class DB:
     @staticmethod
     def _default_user_dict():
         return {
-            "username": None, "sc": 0, "lc": 0,
+            "username": None, "sc": 0.0, "lc": 25,
             "wins": 0, "losses": 0, "games": 0,
             "level": 0, "xp": 0, "layout": "classic", "title": "🎲 Новичок",
             "streak": 0, "max_streak": 0, "total_bets": 0,
@@ -698,14 +701,22 @@ class DB:
     def get_balance(self, user_id, currency):
         cur = self.conn.execute(f"SELECT {currency} FROM users WHERE user_id=?", (user_id,))
         row = cur.fetchone()
-        return row[0] if row else 0
+        if row is None:
+            return 0.0 if currency == "sc" else 0
+        return round(float(row[0] or 0), 2) if currency == "sc" else row[0]
 
     def add_balance(self, user_id, currency, amount):
         self._ensure(user_id)
-        self.conn.execute(
-            f"UPDATE users SET {currency} = {currency} + ? WHERE user_id=?",
-            (amount, user_id)
-        )
+        if currency == "sc":
+            self.conn.execute(
+                "UPDATE users SET sc=ROUND(sc + ?, 2) WHERE user_id=?",
+                (round(float(amount), 2), user_id),
+            )
+        else:
+            self.conn.execute(
+                f"UPDATE users SET {currency} = {currency} + ? WHERE user_id=?",
+                (amount, user_id)
+            )
         self.conn.commit()
 
     def subtract_balance_if_available(self, user_id, currency, amount) -> bool:
@@ -714,18 +725,36 @@ class DB:
         if amount < 0:
             raise ValueError("Amount must not be negative")
 
+        if currency == "sc":
+            amount = round(float(amount), 2)
         self._ensure(user_id)
-        cur = self.conn.execute(
-            f"UPDATE users SET {currency} = {currency} - ? "
-            f"WHERE user_id=? AND {currency} >= ?",
-            (amount, user_id, amount),
-        )
+        if currency == "sc":
+            cur = self.conn.execute(
+                "UPDATE users SET sc=ROUND(sc - ?, 2) "
+                "WHERE user_id=? AND sc >= ?",
+                (amount, user_id, amount),
+            )
+        else:
+            cur = self.conn.execute(
+                f"UPDATE users SET {currency} = {currency} - ? "
+                f"WHERE user_id=? AND {currency} >= ?",
+                (amount, user_id, amount),
+            )
         self.conn.commit()
         return cur.rowcount == 1
 
     def set_balance(self, user_id, currency, amount):
         self._ensure(user_id)
-        self.conn.execute(f"UPDATE users SET {currency} = ? WHERE user_id=?", (amount, user_id))
+        if currency == "sc":
+            self.conn.execute(
+                "UPDATE users SET sc=ROUND(?, 2) WHERE user_id=?",
+                (round(float(amount), 2), user_id),
+            )
+        else:
+            self.conn.execute(
+                f"UPDATE users SET {currency} = ? WHERE user_id=?",
+                (amount, user_id)
+            )
         self.conn.commit()
 
     def add_result(self, user_id, win):
@@ -752,7 +781,7 @@ class DB:
          streak, max_streak, total_bets, total_won, total_lost,
          overheat_score, last_spin_ts) = row
         return {
-            "username": username, "sc": sc, "lc": lc,
+            "username": username, "sc": round(float(sc or 0), 2), "lc": lc,
             "wins": wins, "losses": losses, "games": games,
             "level": level, "xp": xp, "layout": layout, "title": title,
             "streak": streak or 0, "max_streak": max_streak or 0,
@@ -971,7 +1000,10 @@ class DB:
             "FROM users"
         )
         users, sc, lc, games = cur.fetchone()
-        return {"users": users, "sc": sc, "lc": lc, "games": games}
+        return {
+            "users": users, "sc": round(float(sc or 0), 2),
+            "lc": lc, "games": games,
+        }
 
     # ================= МАГАЗИН =================
 
@@ -1063,15 +1095,28 @@ class DB:
             return False, "❌ Предмет не найден"
         sc = self.get_balance(user_id, "sc")
         if sc < item["price_sc"]:
-            return False, f"❌ Нужно {item['price_sc']} SC, у тебя {sc}"
+            from utils import format_sc
+            return False, (
+                f"❌ Нужно {format_sc(item['price_sc'])} SC, "
+                f"у тебя {format_sc(sc)}"
+            )
 
         if self.has_item(user_id, item_id) > 0:
             return False, "❌ У тебя уже есть этот предмет"
-        self.add_balance(user_id, "sc", -item["price_sc"])
+        if not self.subtract_balance_if_available(
+            user_id, "sc", item["price_sc"]
+        ):
+            from utils import format_sc
+            balance = format_sc(self.get_balance(user_id, "sc"))
+            return False, f"❌ Недостаточно SC: у тебя {balance}"
         self.add_item(user_id, item_id, 1)
         if item["category"] == "title":
             self.set_title(user_id, item["name"])
-        return True, f"✅ Куплено: {item['name']} за {item['price_sc']} SC"
+        from utils import format_sc
+        return True, (
+            f"✅ Куплено: {item['name']} за "
+            f"{format_sc(item['price_sc'])} SC"
+        )
 
     def get_luck_items(self, user_id):
         cur = self.conn.execute("""
@@ -2296,7 +2341,7 @@ class DB:
             "avg_lc": int(avg_lc or 0),
             "median_lc": median_lc[0] if median_lc else 0,
             "total_lc": total_lc or 0,
-            "avg_sc": int(avg_sc or 0),
+            "avg_sc": round(float(avg_sc or 0), 2),
             "median_sc": median_sc[0] if median_sc else 0,
             "total_sc": total_sc or 0,
             "avg_level": float(avg_level or 0),
@@ -2429,7 +2474,7 @@ class DB:
         now = int(time.time())
         keep_ids = tuple(keep_top_3_ids)
         reset_columns = (
-            "lc=0, wins=0, losses=0, games=0, streak=0, max_streak=0, "
+            "lc=25, wins=0, losses=0, games=0, streak=0, max_streak=0, "
             "total_bets=0, total_won=0, "
             "total_lost=0, overheat_score=0"
         )
@@ -2474,7 +2519,7 @@ class DB:
             for user_id, lc in rows:
                 sc_gain = _convert_lc_tiered(lc, CONVERSION_TIERS)
                 self.conn.execute(
-                    "UPDATE users SET lc=0, sc=sc+?, lc_before_v100=? "
+                    "UPDATE users SET lc=0, sc=ROUND(sc+?, 2), lc_before_v100=? "
                     "WHERE user_id=?",
                     (sc_gain, lc, user_id)
                 )

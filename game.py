@@ -7,7 +7,9 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from utils import is_current_screen, nav_footer, safe_answer, with_hero
+from utils import (
+    format_sc, is_current_screen, nav_footer, safe_answer, with_hero,
+)
 
 
 class BetStates(StatesGroup):
@@ -1290,7 +1292,13 @@ class Game:
                 )
                 return
 
-            self.brain.db.add_balance(user_id, "sc", -self.ROULETTE_TICKET_PRICE_SC)
+            if not self.brain.db.subtract_balance_if_available(
+                user_id, "sc", self.ROULETTE_TICKET_PRICE_SC
+            ):
+                await safe_answer(
+                    query, "Недостаточно SC. Нужно 5 SC.", show_alert=True
+                )
+                return
             self.brain.db.add_tickets(user_id, 1)
             tickets = self.brain.db.get_tickets(user_id)
             text = (
@@ -1408,18 +1416,19 @@ class Game:
         if lc < 1000:
             return await query.answer("Нужно минимум 1000 LC.", show_alert=True)
         lc_spent = (lc // 1000) * 1000
-        sc_gained = max(1, ((lc_spent // 1000) * 9) // 10)
+        sc_gained = max(1.0, round((lc_spent // 1000) * 0.9, 2))
         self.brain.db.add_balance(user_id, "lc", -lc_spent)
         self.brain.db.add_balance(user_id, "sc", sc_gained)
         self.brain.db.log_event(
             user_id,
             "",
             "exchange",
-            f"{lc_spent}|{sc_gained}",
+            f"{lc_spent}|{format_sc(sc_gained)}",
         )
         self._exchange_cooldowns[user_id] = now + 60
         await query.answer(
-            f"💱 Списано {lc_spent:,} LC (комиссия 10%) → +{sc_gained:,} SC".replace(",", " "),
+            f"💱 Списано {lc_spent:,} LC (комиссия 10%) → "
+            f"+{format_sc(sc_gained)} SC".replace(",", " "),
             show_alert=True,
         )
         await self.cb_play(query)

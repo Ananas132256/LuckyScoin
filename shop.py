@@ -2,7 +2,7 @@ import time
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from cosmetics import RARITY_EMOJI
-from utils import is_current_screen, nav_footer, safe_answer, with_hero
+from utils import format_sc, is_current_screen, nav_footer, safe_answer, with_hero
 
 SHOP_ENABLED = True
 
@@ -107,7 +107,7 @@ class Shop:
 
         body = (
             f"🛒 <b>Магазин LuckyScoin</b>\n\n"
-            f"💰 Твой баланс: <b>{sc} SC</b>\n"
+            f"💰 Твой баланс: <b>{format_sc(sc)} SC</b>\n"
             f"⏳ Обновление ассортимента через: <b>{timer}</b>\n\n"
             f"Ассортимент меняется каждые 6 часов!\n"
             f"Выбери категорию:"
@@ -158,17 +158,20 @@ class Shop:
 
         lines = [
             f"🛒 <b>{CATEGORY_NAMES.get(cat, cat)}</b>\n",
-            f"💰 Баланс: <b>{sc} SC</b>",
+            f"💰 Баланс: <b>{format_sc(sc)} SC</b>",
             f"⏳ Обновление через: <b>{timer}</b>\n",
         ]
         buttons = []
         for item_id, name, price, rarity, _ in items:
             owned = self.brain.db.has_item(user_id, item_id)
             mark = f" ✅ ×{owned}" if owned > 0 else ""
-            lines.append(f"{RARITY_EMOJI.get(rarity, '⚪')} {name} — {price} SC{mark}")
+            lines.append(
+                f"{RARITY_EMOJI.get(rarity, '⚪')} {name} — "
+                f"{format_sc(price)} SC{mark}"
+            )
             if owned == 0:
                 buttons.append([InlineKeyboardButton(
-                    text=f"Купить {name} ({price} SC)",
+                    text=f"Купить {name} ({format_sc(price)} SC)",
                     callback_data=f"shop_buy_{item_id}"
                 )])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="shop")])

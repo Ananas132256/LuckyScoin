@@ -9,13 +9,14 @@ consulting the balance team.
 
 import html
 import time
+from decimal import Decimal, InvalidOperation
 
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
-from utils import safe_answer
+from utils import format_sc, safe_answer
 
 
 TRADE_FEE_BURN_PERCENT = 5
@@ -68,23 +69,28 @@ class Trade:
                 raise ValueError("Неизвестная медаль.")
             return {"type": "badge", "badge_id": badge_id}
         try:
-            amount = int(value)
-        except ValueError as error:
+            amount_decimal = Decimal(value)
+        except InvalidOperation as error:
             raise ValueError("Используй количество SC или badge:<ID>.") from error
-        if amount <= 0:
+        if not amount_decimal.is_finite() or amount_decimal <= 0:
             raise ValueError("Количество SC должно быть больше 0.")
-        return {"type": "sc", "amount": amount}
+        if amount_decimal != amount_decimal.quantize(Decimal("0.01")):
+            raise ValueError("Количество SC укажи не более чем с двумя знаками.")
+        return {"type": "sc", "amount": round(float(amount_decimal), 2)}
 
     def _asset_label(self, asset):
         if asset["type"] == "sc":
-            return f"{asset['amount']} SC"
+            return f"{format_sc(asset['amount'])} SC"
         badge = self._badge(asset["badge_id"])
         return f"медаль {badge['name']}"
 
     def _fee_for(self, asset):
         if asset["type"] != "sc":
             return 0
-        return max(1, (asset["amount"] * TRADE_FEE_BURN_PERCENT) // 100)
+        return max(
+            0.1,
+            round(asset["amount"] * TRADE_FEE_BURN_PERCENT / 100, 2),
+        )
 
     def _owns_badge(self, user_id, badge_id):
         return any(
@@ -99,6 +105,7 @@ class Trade:
                 "Создай предложение командой:\n"
                 "<code>/trade @username &lt;даю&gt; &lt;хочу&gt;</code>\n\n"
                 "<b>Числа означают SC, медаль задаётся как badge:&lt;ID&gt;:</b>\n"
+                "<code>/trade @vasya 2.5 1.25</code>\n"
                 "<code>/trade @vasya 100 500</code>\n"
                 "<code>/trade @vasya badge:leaf 500</code>\n"
                 "<code>/trade @vasya 500 badge:d6_full</code>\n"
@@ -212,7 +219,8 @@ class Trade:
                 my_sc = self.brain.db.get_balance(my_id, "sc")
                 if my_sc < give["amount"]:
                     return await message.answer(
-                        f"❌ Недостаточно SC. У тебя {my_sc}, нужно {give['amount']}."
+                        f"❌ Недостаточно SC. У тебя {format_sc(my_sc)}, "
+                        f"нужно {format_sc(give['amount'])}."
                     )
             elif not self._owns_badge(my_id, give["badge_id"]):
                 return await message.answer("❌ У тебя нет этой медали.")
@@ -223,9 +231,10 @@ class Trade:
                 required = want["amount"] + fee
                 if target_sc < required:
                     return await message.answer(
-                        f"❌ У @{html.escape(target_username)} только {target_sc} SC. "
-                        f"Для сделки нужно {required} "
-                        f"(включая комиссию {fee})."
+                        f"❌ У @{html.escape(target_username)} только "
+                        f"{format_sc(target_sc)} SC. Для сделки нужно "
+                        f"{format_sc(required)} (включая комиссию "
+                        f"{format_sc(fee)})."
                     )
 
             self.counter += 1
@@ -249,7 +258,7 @@ class Trade:
                 )],
             ])
             fee_line = (
-                f"Комиссия с тебя: <b>{fee} SC</b>\n"
+                f"Комиссия с тебя: <b>{format_sc(fee)} SC</b>\n"
                 if fee else ""
             )
             await self.brain.bot.send_message(
@@ -312,7 +321,9 @@ class Trade:
                     if not row or row[0] < required:
                         conn.rollback()
                         return await safe_answer(
-                            query, f"Нужно {required} SC (включая комиссию).",
+                            query,
+                            f"Нужно {format_sc(required)} SC "
+                            "(включая комиссию).",
                             show_alert=True,
                         )
 
@@ -356,12 +367,12 @@ class Trade:
                 # Сначала списываем валюту и медали.
                 if give["type"] == "sc":
                     conn.execute(
-                        "UPDATE users SET sc=sc-? WHERE user_id=?",
+                        "UPDATE users SET sc=ROUND(sc-?, 2) WHERE user_id=?",
                         (give["amount"], from_id),
                     )
                 if want["type"] == "sc":
                     conn.execute(
-                        "UPDATE users SET sc=sc-? WHERE user_id=?",
+                        "UPDATE users SET sc=ROUND(sc-?, 2) WHERE user_id=?",
                         (want["amount"] + fee, to_id),
                     )
 
@@ -403,12 +414,12 @@ class Trade:
                 # Затем начисляем валюту и медали получателям.
                 if give["type"] == "sc":
                     conn.execute(
-                        "UPDATE users SET sc=sc+? WHERE user_id=?",
+                        "UPDATE users SET sc=ROUND(sc+?, 2) WHERE user_id=?",
                         (give["amount"], to_id),
                     )
                 if want["type"] == "sc":
                     conn.execute(
-                        "UPDATE users SET sc=sc+? WHERE user_id=?",
+                        "UPDATE users SET sc=ROUND(sc+?, 2) WHERE user_id=?",
                         (want["amount"], from_id),
                     )
 
@@ -456,7 +467,10 @@ class Trade:
                     "✅ <b>Трейд завершён</b>\n\n"
                     f"Ты получил: <b>{html.escape(self._asset_label(give))}</b>\n"
                     f"Ты отдал: <b>{html.escape(self._asset_label(want))}</b>"
-                    + (f"\nКомиссия: <b>{fee} SC</b>" if fee else ""),
+                    + (
+                        f"\nКомиссия: <b>{format_sc(fee)} SC</b>"
+                        if fee else ""
+                    ),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -473,7 +487,11 @@ class Trade:
                     f"Ты получил: <b>{html.escape(self._asset_label(want))}</b>\n"
                     f"Ты отдал: <b>{html.escape(self._asset_label(give))}</b>\n"
                     f"Партнёр: @{receiver_name}"
-                    + (f"\nКомиссия с партнёра: <b>{fee} SC</b>" if fee else ""),
+                    + (
+                        f"\nКомиссия с партнёра: "
+                        f"<b>{format_sc(fee)} SC</b>"
+                        if fee else ""
+                    ),
                     parse_mode="HTML",
                 )
             except Exception:

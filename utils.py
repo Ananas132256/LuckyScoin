@@ -15,6 +15,14 @@ def format_number(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+def format_sc(value) -> str:
+    """Форматирует SC с разделителями тысяч и не более чем двумя знаками."""
+    value = round(float(value), 2)
+    if value == int(value):
+        return format_number(int(value))
+    return f"{value:,.2f}".replace(",", " ").rstrip("0").rstrip(".")
+
+
 def hero_card(user: dict, extra: str = "") -> str:
     """Render a compact HTML profile card from a database user dict."""
     username = escape(str(user.get("username") or "player"))
@@ -29,7 +37,7 @@ def hero_card(user: dict, extra: str = "") -> str:
     filled = int(progress * 10)
     xp_bar = "▰" * filled + "▱" * (10 - filled)
 
-    sc = format_number(int(user.get("sc") or 0))
+    sc = format_sc(user.get("sc") or 0)
     lc = format_number(int(user.get("lc") or 0))
     extra_line = f"\n{escape(extra)}" if extra else ""
     return (

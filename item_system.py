@@ -198,7 +198,11 @@ def handle_break(brain, user_id: int, badge_id: str, slot: int):
     if t == "GET_SC":
         amt = after.get("amount", 0)
         brain.db.add_balance(user_id, "sc", amt)
-        return f"💔 <b>{badge['name']}</b> сломался! Взамен +{amt} SC."
+        from utils import format_sc
+        return (
+            f"💔 <b>{badge['name']}</b> сломался! "
+            f"Взамен +{format_sc(amt)} SC."
+        )
     if t == "GET_LC":
         amt = after.get("amount", 0)
         brain.db.add_balance(user_id, "lc", amt)

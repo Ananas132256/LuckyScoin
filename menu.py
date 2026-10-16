@@ -1,8 +1,11 @@
+import html
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from utils import is_current_screen, nav_footer, safe_answer, with_hero
+from utils import (
+    format_sc, is_current_screen, nav_footer, safe_answer, with_hero,
+)
 import time
 
 
@@ -228,7 +231,7 @@ class Menu:
                 .replace(",", " ") + "\n"
                 "Переведено по каскадному курсу:\n"
                 + "\n".join(rate_lines) + "\n"
-                f"Начислено: <b>+{conv['sc_gained']} SC</b>\n\n"
+                f"Начислено: <b>+{format_sc(conv['sc_gained'])} SC</b>\n\n"
                 "<i>Мы сбрасываем экономику, чтобы дать всем равный "
                 "старт. Раньше LC было слишком много и они обесценились. "
                 "SC — стабильная валюта, ей инфляция не грозит.</i>\n\n"
@@ -380,7 +383,7 @@ class Menu:
             f"{title_line}"
             f"{badges_block}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
-            f"💰 SC: {u['sc']}\n"
+            f"💰 SC: {format_sc(u['sc'])}\n"
             f"🍀 LC: {u['lc']}"
             f"{casino_block}\n"
             f"🎮 Игр: {u['games']}\n"
@@ -468,12 +471,25 @@ class Menu:
         await self._show_top(query, sort_by)
 
     async def _show_top(self, query: CallbackQuery, sort_by: str):
+        from config import SEASON_DURATION_DAYS
+
         _, label, unit = self.TOP_SORTS[sort_by]
         caller_id = query.from_user.id
         top_ids = set()
+        elapsed = self.brain.db.get_season_elapsed()
+        days_left = max(
+            0, SEASON_DURATION_DAYS - elapsed // 86400
+        )
+        remaining = "&lt; 1" if days_left == 0 else str(days_left)
+        season_line = (
+            f"🏁 Сезон {self.brain.db.get_current_season()} · "
+            f"осталось {remaining} дн.\n\n"
+        )
         if sort_by == "winrate":
             data = getattr(self.brain.db, f"top_{sort_by}")(10)
-            lines = [f"🏆 <b>Топ по {label}</b> (мин 10 игр)\n"]
+            lines = [
+                season_line + f"🏆 <b>Топ по {label}</b> (мин 10 игр)\n"
+            ]
             if not data:
                 lines.append("Пока пусто.")
             medals = ["🥇", "🥈", "🥉"]
@@ -483,10 +499,11 @@ class Menu:
                 name = f"@{uname}" if uname else f"ID {uid}"
                 if uid == caller_id:
                     name = f"👉 {name} 👈"
+                title_text = f" {html.escape(title)}" if title else ""
                 wins_text = f"{wins:,}".replace(",", " ")
                 games_text = f"{games:,}".replace(",", " ")
                 lines.append(
-                    f"{medal} {name} — {wr}% "
+                    f"{medal} {name}{title_text} — {wr}% "
                     f"({wins_text}/{games_text})"
                 )
 
@@ -517,7 +534,7 @@ class Menu:
                         )
         else:
             data = self.brain.db.top_by(sort_by, 10)
-            lines = [f"🏆 <b>Топ по {label}</b>\n"]
+            lines = [season_line + f"🏆 <b>Топ по {label}</b>\n"]
             if not data:
                 lines.append("Пусто.")
             medals = ["🥇", "🥈", "🥉"]
@@ -527,22 +544,30 @@ class Menu:
                 name = f"@{uname}" if uname else f"ID {uid}"
                 if uid == caller_id:
                     name = f"👉 {name} 👈"
-                value = f"{val:,}".replace(",", " ")
-                lines.append(f"{medal} {name} — {value}{unit}")
+                title_text = f" {html.escape(title)}" if title else ""
+                value = (
+                    format_sc(val) if sort_by == "sc"
+                    else f"{val:,}".replace(",", " ")
+                )
+                lines.append(
+                    f"{medal} {name}{title_text} — {value}{unit}"
+                )
 
             if caller_id not in top_ids:
                 rank, value, total = self.brain.db.get_user_rank(
                     caller_id, sort_by
                 )
                 if rank is not None:
-                    value = f"{value:,}".replace(",", " ")
                     if sort_by == "sc":
-                        value_text = f"💰 {value}"
+                        value_text = f"💰 {format_sc(value)}"
                     elif sort_by == "lc":
+                        value = f"{value:,}".replace(",", " ")
                         value_text = f"🍀 {value}"
                     elif sort_by == "level":
+                        value = f"{value:,}".replace(",", " ")
                         value_text = f"⭐ {value} ур."
                     else:
+                        value = f"{value:,}".replace(",", " ")
                         value_text = f"🎮 {value} игр"
                     lines.extend([
                         "\n┈┈┈┈┈┈┈┈┈┈",

@@ -5,12 +5,13 @@ import os
 import asyncio
 import html
 import time
+from decimal import Decimal, InvalidOperation
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from cosmetics import BADGES, badge_slots_for_level
 from db import DB
-from utils import format_number
+from utils import format_number, format_sc
 
 
 # ============================================================
@@ -324,7 +325,7 @@ class Admin:
             "✅ <b>Обновление 1.0.0 применено</b>\n\n"
             f"👥 Игроков затронуто: <b>{players}</b>\n"
             f"🍀 Всего LC конвертировано: <b>{total_lc:,}</b>\n"
-            f"💰 Всего SC начислено: <b>{total_sc:,}</b>\n\n"
+            f"💰 Всего SC начислено: <b>{format_sc(total_sc)}</b>\n\n"
             "🎁 Титул «Старичок» активен 2 дня.\n"
             "🎉 Все увидят приветственный экран при следующем /start."
         ).replace(",", " ")
@@ -449,7 +450,7 @@ class Admin:
         text = (
             "🛠 <b>Админ-панель LuckyScoin</b>\n\n"
             f"👥 Юзеров: <b>{s['users']}</b>\n"
-            f"💰 SC в обороте: <b>{s['sc']}</b>\n"
+            f"💰 SC в обороте: <b>{format_sc(s['sc'])}</b>\n"
             f"🍀 LC в обороте: <b>{s['lc']}</b>\n"
             f"🎮 Игр сыграно: <b>{s['games']}</b>\n\n"
             "Выбери действие:"
@@ -615,9 +616,9 @@ class Admin:
             "📊 <b>Экономика</b>",
             f"• Игроков: {format_number(player_count)}",
             (
-                f"• SC всего: {self._fmt_money(economy['total_sc'])} · "
-                f"в среднем {self._fmt_money(economy['avg_sc'])} · "
-                f"медиана {self._fmt_median(economy['median_sc'])}"
+                f"• SC всего: {format_sc(economy['total_sc'])} · "
+                f"в среднем {format_sc(economy['avg_sc'])} · "
+                f"медиана {format_sc(economy['median_sc'])}"
             ),
             (
                 f"• LC всего: {self._fmt_money(economy['total_lc'])} · "
@@ -745,6 +746,21 @@ class Admin:
             return None
         return args[1:]
 
+    @staticmethod
+    def _parse_currency_amount(currency, raw_amount):
+        if currency != "sc":
+            return int(raw_amount)
+        try:
+            amount = Decimal(raw_amount)
+        except InvalidOperation as error:
+            raise ValueError("Неверная сумма SC.") from error
+        if (
+            not amount.is_finite()
+            or amount != amount.quantize(Decimal("0.01"))
+        ):
+            raise ValueError("Сумма SC должна быть не более чем с двумя знаками.")
+        return float(amount)
+
     async def cmd_give(self, message: Message):
         if not self._check(message):
             return
@@ -755,21 +771,26 @@ class Admin:
         target_id = self._resolve_user(parts[0])
         if target_id is None:
             return await message.answer("❌ Юзер не найден.")
-        try:
-            currency = parts[1].lower()
-            amount = int(parts[2])
-        except ValueError:
-            return await message.answer("❌ Пример: /give @vasya sc 100")
+        currency = parts[1].lower()
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        try:
+            amount = self._parse_currency_amount(currency, parts[2])
+        except (ValueError, InvalidOperation):
+            return await message.answer(
+                "❌ Неверная сумма. Для SC можно указать до двух знаков."
+            )
         if amount < 0:
             return await message.answer("❌ Используй /take для списания.")
 
         self.brain.db.add_balance(target_id, currency, amount)
         new_bal = self.brain.db.get_balance(target_id, currency)
+        amount_text = format_sc(amount) if currency == "sc" else amount
+        balance_text = format_sc(new_bal) if currency == "sc" else new_bal
         await message.answer(
-            f"✅ Выдано <b>{amount} {currency.upper()}</b> юзеру <code>{target_id}</code>\n"
-            f"Новый баланс: {new_bal}",
+            f"✅ Выдано <b>{amount_text} {currency.upper()}</b> "
+            f"юзеру <code>{target_id}</code>\n"
+            f"Новый баланс: {balance_text}",
             parse_mode="HTML"
         )
 
@@ -783,28 +804,35 @@ class Admin:
         target_id = self._resolve_user(parts[0])
         if target_id is None:
             return await message.answer("❌ Юзер не найден.")
-        try:
-            currency = parts[1].lower()
-            amount = int(parts[2])
-        except ValueError:
-            return await message.answer("❌ Пример: /take @vasya lc 50")
+        currency = parts[1].lower()
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        try:
+            amount = self._parse_currency_amount(currency, parts[2])
+        except (ValueError, InvalidOperation):
+            return await message.answer(
+                "❌ Неверная сумма. Для SC можно указать до двух знаков."
+            )
         if amount < 0:
             return await message.answer("❌ Сумма не может быть отрицательной.")
         if not self.brain.db.subtract_balance_if_available(
             target_id, currency, amount
         ):
             current = self.brain.db.get_balance(target_id, currency)
+            current_text = format_sc(current) if currency == "sc" else current
+            amount_text = format_sc(amount) if currency == "sc" else amount
             return await message.answer(
-                f"❌ У юзера только {current} {currency.upper()}. "
-                f"Забрать {amount} нельзя."
+                f"❌ У юзера только {current_text} {currency.upper()}. "
+                f"Забрать {amount_text} нельзя."
             )
 
         new_bal = self.brain.db.get_balance(target_id, currency)
+        amount_text = format_sc(amount) if currency == "sc" else amount
+        balance_text = format_sc(new_bal) if currency == "sc" else new_bal
         await message.answer(
-            f"✅ Забрано <b>{amount} {currency.upper()}</b> у <code>{target_id}</code>\n"
-            f"Новый баланс: {new_bal}",
+            f"✅ Забрано <b>{amount_text} {currency.upper()}</b> "
+            f"у <code>{target_id}</code>\n"
+            f"Новый баланс: {balance_text}",
             parse_mode="HTML"
         )
 
@@ -818,19 +846,21 @@ class Admin:
         target_id = self._resolve_user(parts[0])
         if target_id is None:
             return await message.answer("❌ Юзер не найден.")
-        try:
-            currency = parts[1].lower()
-            amount = int(parts[2])
-        except ValueError:
-            return await message.answer("❌ Неверные аргументы.")
+        currency = parts[1].lower()
         if currency not in ("sc", "lc"):
             return await message.answer("❌ Валюта: sc или lc")
+        try:
+            amount = self._parse_currency_amount(currency, parts[2])
+        except (ValueError, InvalidOperation):
+            return await message.answer("❌ Неверные аргументы.")
         if amount < 0:
             return await message.answer("❌ Баланс не может быть отрицательным.")
 
         self.brain.db.set_balance(target_id, currency, amount)
+        amount_text = format_sc(amount) if currency == "sc" else amount
         await message.answer(
-            f"✅ Баланс {currency.upper()} юзера <code>{target_id}</code> = <b>{amount}</b>",
+            f"✅ Баланс {currency.upper()} юзера <code>{target_id}</code> "
+            f"= <b>{amount_text}</b>",
             parse_mode="HTML"
         )
 
@@ -926,7 +956,7 @@ class Admin:
             f"{title_line}"
             f"{badges_line}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
-            f"💰 SC: {u['sc']}\n"
+            f"💰 SC: {format_sc(u['sc'])}\n"
             f"🍀 LC: {u['lc']}\n\n"
             f"🎮 Игр: {u['games']}\n"
             f"✅ Побед: {u['wins']}\n"
@@ -1205,7 +1235,7 @@ class Admin:
             f"🗑 <b>Удалить юзера?</b>\n\n"
             f"ID: <code>{target_id}</code>\n"
             f"Ник: @{u['username']}\n"
-            f"💰 SC: {u['sc']}  •  🍀 LC: {u['lc']}\n"
+            f"💰 SC: {format_sc(u['sc'])}  •  🍀 LC: {u['lc']}\n"
             f"⭐ Уровень: {u['level']}\n\n"
             f"<b>Это действие необратимо!</b>"
         )

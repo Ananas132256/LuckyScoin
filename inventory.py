@@ -9,7 +9,7 @@ from cosmetics import (
     SLOT_UNLOCK_LEVELS, badge_slots_for_level, get_next_rarity, is_unlocked,
     describe_effect_dict, level_titles_for,
 )
-from utils import nav_footer, safe_answer, with_hero
+from utils import format_sc, nav_footer, safe_answer, with_hero
 
 # Включает/выключает отображение кнопки "⚒ Крафт" в инвентаре.
 # True — крафт доступен, False — кнопка скрыта.
@@ -237,13 +237,14 @@ class Inventory:
                             "🔒 не продаётся"
                         )
                     elif price > 0:
-                        sale_price = max(1, price // 2)
+                        sale_price = max(0.5, price / 2)
+                        sale_price_text = format_sc(sale_price)
                         lines.append(
                             f"{html.escape(name)} ×{quantity} "
-                            f"({sale_price} SC за штуку)"
+                            f"({sale_price_text} SC за штуку)"
                         )
                         buttons.append([InlineKeyboardButton(
-                            text=f"Продать {name} ({sale_price} SC)",
+                            text=f"Продать {name} ({sale_price_text} SC)",
                             callback_data=f"inv_sell_{item_id}",
                         )])
                     else:
@@ -293,10 +294,10 @@ class Inventory:
                 await safe_answer(query, "Этот значок нельзя продать.", show_alert=True)
                 return
 
-            sale_price = max(1, price // 2)
+            sale_price = max(0.5, price / 2)
             text = (
                 f"💰 Продать {html.escape(badge['name'])} "
-                f"за <b>{sale_price} SC</b>?"
+                f"за <b>{format_sc(sale_price)} SC</b>?"
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -339,7 +340,7 @@ class Inventory:
             if price <= 0:
                 await safe_answer(query, "Этот значок нельзя продать.", show_alert=True)
                 return
-            sale_price = max(1, price // 2)
+            sale_price = max(0.5, price / 2)
             if not self.brain.db.remove_item(user_id, item_id, 1):
                 await safe_answer(query, "Не удалось списать значок.", show_alert=True)
                 return
@@ -348,7 +349,8 @@ class Inventory:
             balance = self.brain.db.get_balance(user_id, "sc")
             notice = (
                 f"✅ Продано: {html.escape(badge['name'])} "
-                f"за {sale_price} SC. Баланс: {balance} SC"
+                f"за {format_sc(sale_price)} SC. "
+                f"Баланс: {format_sc(balance)} SC"
             )
             await self.cb_sell(query, notice=notice)
         except Exception as error:
