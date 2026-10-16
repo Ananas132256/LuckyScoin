@@ -3,6 +3,7 @@ import random
 import time
 import logging
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
@@ -574,8 +575,30 @@ class DB:
                     "rarity=excluded.rarity, category=excluded.category",
                     (item_id, cosmetic["name"], price, cosmetic["rarity"], category)
                 )
-        self.conn.execute("DELETE FROM shop_stock")
-        self.conn.execute("UPDATE shop_meta SET next_refresh=0 WHERE id=1")
+        catalog = tuple(sorted(
+            (cosmetic["shop_id"], cosmetic["price_sc"], cosmetic["rarity"])
+            for cosmetic in (*BADGES.values(), *TITLES.values())
+            if isinstance(cosmetic.get("shop_id"), int)
+            and cosmetic["shop_id"] > 0
+            and isinstance(cosmetic.get("price_sc"), int)
+            and cosmetic["price_sc"] > 0
+        ))
+        catalog_hash = hashlib.sha256(
+            json.dumps(catalog, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        stored_catalog_hash = self.conn.execute(
+            "SELECT value FROM system_flags WHERE key='shop_catalog_hash'"
+        ).fetchone()
+        if not stored_catalog_hash or stored_catalog_hash[0] != catalog_hash:
+            self.conn.execute("DELETE FROM shop_stock")
+            self.conn.execute("UPDATE shop_meta SET next_refresh=0 WHERE id=1")
+            self.conn.execute(
+                "INSERT INTO system_flags (key, value, updated_at) "
+                "VALUES ('shop_catalog_hash', ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value=excluded.value, updated_at=excluded.updated_at",
+                (catalog_hash, int(time.time()))
+            )
         self.conn.commit()
 
     def _ensure(self, user_id):
@@ -754,7 +777,8 @@ class DB:
         if field not in allowed:
             field = "sc"
         cur = self.conn.execute(
-            f"SELECT username, user_id, {field}, title FROM users ORDER BY {field} DESC LIMIT ?",
+            f"SELECT username, user_id, {field}, title FROM users "
+            f"ORDER BY {field} DESC, user_id ASC LIMIT ?",
             (limit,)
         )
         return cur.fetchall()
@@ -762,10 +786,61 @@ class DB:
     def top_winrate(self, limit=10, min_games=10):
         cur = self.conn.execute(
             "SELECT username, user_id, wins, games, ROUND(wins*100.0/games, 1) AS wr, title "
-            "FROM users WHERE games >= ? ORDER BY wr DESC LIMIT ?",
+            "FROM users WHERE games >= ? ORDER BY wr DESC, user_id ASC LIMIT ?",
             (min_games, limit)
         )
         return cur.fetchall()
+
+    def get_user_rank(self, user_id, field):
+        allowed = {"sc", "lc", "level", "games"}
+        if field not in allowed:
+            return None
+
+        cur = self.conn.execute(
+            f"SELECT {field} FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+
+        value = row[0]
+        cur = self.conn.execute(
+            f"SELECT COUNT(*) FROM users "
+            f"WHERE {field}>? OR ({field}=? AND user_id<?)",
+            (value, value, user_id)
+        )
+        rank = cur.fetchone()[0] + 1
+        cur = self.conn.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        return rank, value, total
+
+    def get_user_rank_winrate(self, user_id, min_games=10):
+        cur = self.conn.execute(
+            "SELECT wins, games, ROUND(wins*100.0/games, 1) "
+            "FROM users WHERE user_id=? AND games>=?",
+            (user_id, min_games)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+
+        wins, games, winrate = row
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM users "
+            "WHERE games>=? AND ("
+            "ROUND(wins*100.0/games, 1)>? OR "
+            "(ROUND(wins*100.0/games, 1)=? AND user_id<?)"
+            ")",
+            (min_games, winrate, winrate, user_id)
+        )
+        rank = cur.fetchone()[0] + 1
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM users WHERE games>=?",
+            (min_games,)
+        )
+        total = cur.fetchone()[0]
+        return rank, winrate, wins, games, total
 
     def get_bot_stats(self):
         cur = self.conn.execute(
@@ -1752,7 +1827,7 @@ class DB:
         else:
             self.conn.execute(
                 "UPDATE users SET total_bets = total_bets + ?, total_lost = total_lost + ? WHERE user_id=?",
-                (bet, bet, user_id)
+                (bet, bet + abs(win_amount), user_id)
             )
         self.conn.commit()
 

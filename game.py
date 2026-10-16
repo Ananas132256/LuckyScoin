@@ -69,7 +69,7 @@ class Game:
     #  НАСТРОЙКИ
     # ============================================================
     LEVEL_REQ = {
-        "common": 0, "uncommon": 6, "rare": 25, "ultra": 50, "epic": 100,
+        "common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100,
         "advanced": 12,
     }
     STICKY_CHANCE = 0.15
@@ -898,7 +898,9 @@ class Game:
             self.brain.db.add_result(user_id, False)
             self.brain.db.add_streak_loss(user_id)
 
-        self.brain.db.add_bet_stats(user_id, bet, win_amount)
+        total_lost_this_spin = bet + applied_loss if win_amount < 0 else 0
+        stats_win_amount = -total_lost_this_spin if win_amount < 0 else win_amount
+        self.brain.db.add_bet_stats(user_id, bet, stats_win_amount)
 
         # Базовый прирост + ускорение от экипированных значков.
         overheat_gain = (
@@ -1391,19 +1393,19 @@ class Game:
         lc = self.brain.db.get_balance(user_id, "lc")
         if lc < 1000:
             return await query.answer("Нужно минимум 1000 LC.", show_alert=True)
-        amount = (lc // 1000) * 1000
-        sc = max(1, ((amount // 1000) * 9) // 10)
-        self.brain.db.add_balance(user_id, "lc", -amount)
-        self.brain.db.add_balance(user_id, "sc", sc)
+        lc_spent = (lc // 1000) * 1000
+        sc_gained = max(1, ((lc_spent // 1000) * 9) // 10)
+        self.brain.db.add_balance(user_id, "lc", -lc_spent)
+        self.brain.db.add_balance(user_id, "sc", sc_gained)
         self.brain.db.log_event(
             user_id,
-            query.from_user.username or "",
+            "",
             "exchange",
-            f"{amount}|{sc}",
+            f"{lc_spent}|{sc_gained}",
         )
         self._exchange_cooldowns[user_id] = now + 60
         await query.answer(
-            f"💱 Списано {amount:,} LC (комиссия 10%) → +{sc:,} SC".replace(",", " "),
+            f"💱 Списано {lc_spent:,} LC (комиссия 10%) → +{sc_gained:,} SC".replace(",", " "),
             show_alert=True,
         )
         await self.cb_play(query)
