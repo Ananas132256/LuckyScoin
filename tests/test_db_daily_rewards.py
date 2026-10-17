@@ -2,7 +2,7 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from db import DB
+from core.database import DB
 
 
 class DailyRewardTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class DailyRewardTests(unittest.TestCase):
         self.db.conn.close()
 
     def test_get_daily_state_for_missing_user_does_not_create_row(self):
-        with patch("db.time.time", return_value=1_000_000):
+        with patch("core.database.time.time", return_value=1_000_000):
             state = self.db.get_daily_state(42)
 
         self.assertEqual(state, {
@@ -46,9 +46,9 @@ class DailyRewardTests(unittest.TestCase):
             "VALUES (42, 3, 1_000_000)"
         )
 
-        with patch("db.time.time", return_value=1_000_000 + 24 * 3600 - 1):
+        with patch("core.database.time.time", return_value=1_000_000 + 24 * 3600 - 1):
             self.assertFalse(self.db.claim_daily(42, 4))
-        with patch("db.time.time", return_value=1_000_000 + 24 * 3600):
+        with patch("core.database.time.time", return_value=1_000_000 + 24 * 3600):
             self.assertTrue(self.db.claim_daily(42, 4))
 
         self.assertEqual(
@@ -64,17 +64,17 @@ class DailyRewardTests(unittest.TestCase):
             "VALUES (42, 3, 1_000_000)"
         )
 
-        with patch("db.time.time", return_value=1_000_000 + 48 * 3600 - 1):
+        with patch("core.database.time.time", return_value=1_000_000 + 48 * 3600 - 1):
             self.assertFalse(self.db.get_daily_state(42)["streak_lost"])
-        with patch("db.time.time", return_value=1_000_000 + 48 * 3600):
+        with patch("core.database.time.time", return_value=1_000_000 + 48 * 3600):
             state = self.db.get_daily_state(42)
         self.assertTrue(state["streak_lost"])
         self.assertTrue(state["can_claim"])
 
     def test_record_wheel_spin_creates_and_updates_state(self):
-        with patch("db.time.time", return_value=1_234_567):
+        with patch("core.database.time.time", return_value=1_234_567):
             self.db.record_wheel_spin(42)
-        with patch("db.time.time", return_value=1_234_568):
+        with patch("core.database.time.time", return_value=1_234_568):
             self.db.record_wheel_spin(42)
 
         self.assertEqual(

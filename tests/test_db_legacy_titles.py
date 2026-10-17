@@ -3,7 +3,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-from db import DB
+from core.database import DB
 
 
 class LegacyTitleRecoveryTests(unittest.TestCase):

@@ -8,7 +8,7 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from admin import is_admin
+from handlers.admin import is_admin
 from utils import nav_footer, safe_answer
 
 

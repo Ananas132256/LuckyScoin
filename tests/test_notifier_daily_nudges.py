@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from notifier import _tick
+from background.notifier import _tick
 
 
 class FakeDB:
@@ -59,8 +59,8 @@ class DailyNudgeTests(unittest.IsolatedAsyncioTestCase):
         brain = FakeBrain()
         brain.db.flags["daily_nudge_ts:2"] = str(1_000_000 - 20 * 3600 + 1)
 
-        with patch("notifier.time.time", return_value=1_000_000), patch(
-            "notifier.is_admin", side_effect=lambda uid, db: uid == 1
+        with patch("background.notifier.time.time", return_value=1_000_000), patch(
+            "background.notifier.is_admin", side_effect=lambda uid, db: uid == 1
         ):
             await _tick(brain)
 
@@ -75,17 +75,29 @@ class DailyNudgeTests(unittest.IsolatedAsyncioTestCase):
         brain = FakeBrain()
         brain.db.maintenance_enabled = True
 
-        with patch("notifier.is_admin") as is_admin:
+        with patch("background.notifier.is_admin") as is_admin:
             await _tick(brain)
 
         self.assertEqual(brain.bot.messages, [])
         is_admin.assert_not_called()
 
+    async def test_notification_opt_out_skips_daily_nudge(self):
+        brain = FakeBrain()
+        brain.db.flags["notif:2"] = "0"
+
+        with patch("background.notifier.time.time", return_value=1_000_000), patch(
+            "background.notifier.is_admin", return_value=False
+        ):
+            await _tick(brain)
+
+        self.assertEqual([uid for uid, _ in brain.bot.messages], [1, 4])
+        self.assertNotIn("daily_nudge_ts:2", brain.db.flags)
+
     async def test_failed_send_does_not_stop_other_users(self):
         brain = FakeBrain(failing_user=2)
 
-        with patch("notifier.time.time", return_value=1_000_000), patch(
-            "notifier.is_admin", return_value=False
+        with patch("background.notifier.time.time", return_value=1_000_000), patch(
+            "background.notifier.is_admin", return_value=False
         ):
             await _tick(brain)
 

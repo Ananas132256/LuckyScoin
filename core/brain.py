@@ -1,19 +1,19 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from db import DB
-from menu import Menu
-from game import Game
-from admin import Admin
-from shop import Shop
-from trade import Trade
-from tycoon import Tycoon
-from inventory import Inventory
-from complaints import Complaints
-from daily import Daily
-from middleware import MaintenanceMiddleware, ActivityMiddleware
-from notifier import notifier_loop, season_loop
-from admin import ADMIN_IDS
+from core.database import DB
+from handlers.menu import Menu
+from handlers.game import Game
+from handlers.admin import Admin
+from handlers.shop import Shop
+from handlers.trade import Trade
+from handlers.tycoon import Tycoon
+from handlers.inventory import Inventory
+from handlers.complaints import Complaints
+from handlers.daily import Daily
+from core.middleware import MaintenanceMiddleware, ActivityMiddleware
+from background.notifier import notifier_loop, season_loop
+from handlers.admin import ADMIN_IDS
 
 
 class Brain:

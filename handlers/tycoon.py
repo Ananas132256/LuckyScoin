@@ -2,7 +2,7 @@ from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from db import DB
+from core.database import DB
 from utils import is_current_screen, nav_footer, safe_answer, with_hero
 
 

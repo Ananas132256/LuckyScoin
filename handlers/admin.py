@@ -9,8 +9,8 @@ from decimal import Decimal, InvalidOperation
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from cosmetics import BADGES, badge_slots_for_level
-from db import DB
+from content.catalog import BADGES, badge_slots_for_level
+from core.database import DB
 from utils import format_number, format_sc
 
 
@@ -106,6 +106,7 @@ class Admin:
         dp.message(Command("apply_update_100"))(self.cmd_apply_update)
         dp.message(Command("end_season"))(self.cmd_end_season)
         dp.message(Command("give"))(self.cmd_give)
+        dp.message(Command("giveitem"))(self.cmd_giveitem)
         dp.message(Command("take"))(self.cmd_take)
         dp.message(Command("setbalance"))(self.cmd_setbalance)
         dp.message(Command("setlevel"))(self.cmd_setlevel)
@@ -795,6 +796,38 @@ class Admin:
             parse_mode="HTML"
         )
 
+    async def cmd_giveitem(self, message: Message):
+        if not self._check(message):
+            return
+        parts = message.text.split()
+        if len(parts) not in (3, 4):
+            return await message.answer(
+                "Использование: /giveitem <id|@user> <item_id> [qty=1]"
+            )
+        self._log(message)
+        target_id = self._resolve_user(parts[1])
+        if target_id is None:
+            return await message.answer("❌ Юзер не найден.")
+        try:
+            item_id = int(parts[2])
+            quantity = int(parts[3]) if len(parts) == 4 else 1
+        except ValueError:
+            return await message.answer("❌ item_id и qty должны быть целыми числами.")
+        if item_id <= 0 or quantity <= 0:
+            return await message.answer("❌ item_id и qty должны быть больше нуля.")
+
+        item = self.brain.db.get_item(item_id)
+        if item is None:
+            return await message.answer("❌ Предмет не найден.")
+
+        self.brain.db.add_item(target_id, item_id, quantity)
+        await message.answer(
+            f"✅ Выдан предмет <b>{html.escape(str(item['name']))}</b> "
+            f"(ID <code>{item_id}</code>) x<b>{quantity}</b> "
+            f"юзеру <code>{target_id}</code>.",
+            parse_mode="HTML",
+        )
+
     async def cmd_take(self, message: Message):
         if not self._check(message):
             return
@@ -1430,7 +1463,7 @@ class Admin:
 
         try:
             from config import UPDATE_GIF_FILE_ID
-            from menu import Menu
+            from handlers.menu import Menu
 
             if self.brain.db.get_flag("welcome_back_sent_v100") == "1":
                 return

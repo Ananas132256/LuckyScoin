@@ -288,6 +288,43 @@ ITEMS = {
         ],
         "after_break": {"type": "GET_ITEM", "item_id": "diamond"},
     },
+    "halloween_jack": {
+        "shop_id": 51,
+        "name": "🎃 Джек",
+        "desc": (
+            "Хеллоуинский легендарный значок. Пассивно: +25% XP. "
+            "Активно: чётный ролл → ×3 множитель, нечётный → ×2 XP. "
+            "Окно 26–31 октября: ×2 к XP и множителю. 31 октября – 1 ноября: ×3."
+        ),
+        "rarity": "legendary",
+        "price_sc": 5000,
+        "hp": "inf",
+        "break_on": [],
+        "break_chance": 0,
+        "effect": "set.xp_bonus = 0.25",
+        "hard_effect": [],
+        "after_break": {"type": "NOTHING"},
+        "halloween": True,
+        "halloween_end": "jack",
+    },
+    "halloween_cyclone": {
+        "shop_id": 52,
+        "name": "🌀 Круговорот",
+        "desc": (
+            "Меняет местами соседей слева и справа, затем становится "
+            "самым частым символом ролла. При равенстве — самым ценным. "
+            "На краю — зацикливается."
+        ),
+        "rarity": "rare",
+        "price_sc": 1500,
+        "hp": 80,
+        "break_on": ["roll"],
+        "break_chance": 0.02,
+        "effect": "",
+        "hard_effect": [],
+        "after_break": {"type": "GET_SC", "amount": 300},
+        "halloween": True,
+    },
 }
 
 # Обратное имя для существующего кода экипировки: медали являются предметами.
@@ -362,6 +399,15 @@ TITLES = {
         "rarity": "legendary",
         "price_sc": 0,
         "limited": True,
+    },
+    "halloween_2026": {
+        "shop_id": 120,
+        "name": "🎃 Хеллоуин2026",
+        "desc": "Титул за участие в хеллоуинском ивенте 2026.",
+        "rarity": "legendary",
+        "price_sc": 0,
+        "limited": True,
+        "halloween": True,
     },
 }
 

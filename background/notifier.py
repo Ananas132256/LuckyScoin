@@ -1,7 +1,7 @@
 import asyncio
 import time
 
-from admin import is_admin
+from handlers.admin import is_admin
 
 
 CHECK_INTERVAL = 1800          # 30 минут
@@ -151,6 +151,8 @@ async def _tick(brain):
 
     for uid in brain.db.get_all_user_ids():
         if is_admin(uid, brain.db):
+            continue
+        if brain.db.get_flag(f"notif:{uid}", "1") != "1":
             continue
 
         state = brain.db.get_daily_state(uid)

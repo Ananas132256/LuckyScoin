@@ -145,7 +145,7 @@ def get_badge_effects(badge: dict, stats: dict, roll_count: int = 0) -> dict:
 
 def get_total_effects(brain, user_id: int) -> dict:
     """Все эффекты от надетых медалей."""
-    from cosmetics import BADGES
+    from content.catalog import BADGES
 
     stats = brain.db.get_extended_stats(user_id)
     effects = {}
@@ -181,7 +181,7 @@ def should_break(badge: dict, trigger: str) -> bool:
 
 
 def handle_break(brain, user_id: int, badge_id: str, slot: int):
-    from cosmetics import BADGES, badge_slots_for_level
+    from content.catalog import BADGES, badge_slots_for_level
     badge = BADGES.get(badge_id)
     if not badge:
         return None

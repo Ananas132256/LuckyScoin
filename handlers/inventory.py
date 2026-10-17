@@ -4,12 +4,12 @@ import random
 from aiogram import Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-from cosmetics import (
+from content.catalog import (
     BADGES, TITLES, LEVEL_TITLES, RARITY_EMOJI, CRAFT_CHANCES,
     SLOT_UNLOCK_LEVELS, badge_slots_for_level, get_next_rarity, is_unlocked,
     describe_effect_dict, level_titles_for,
 )
-from utils import format_sc, nav_footer, safe_answer, with_hero
+from utils import format_sc, nav_footer, paginate, safe_answer, with_hero
 
 # Включает/выключает отображение кнопки "⚒ Крафт" в инвентаре.
 # True — крафт доступен, False — кнопка скрыта.
@@ -30,6 +30,7 @@ class Inventory:
         # dp.callback_query(F.data.startswith("inv_craft_confirm_"))(self.cb_craft_confirm)
         dp.callback_query(F.data == "inv_badges")(self.cb_badges)
         dp.callback_query(F.data == "inv_titles")(self.cb_titles)
+        dp.callback_query(F.data.startswith("inv_titles_page_"))(self.cb_titles_page)
         dp.callback_query(F.data.startswith("inv_slot_"))(self.cb_slot)
         dp.callback_query(F.data.startswith("inv_badge_pick_"))(self.cb_badge_pick)
         dp.callback_query(F.data.startswith("inv_badge_remove_"))(self.cb_badge_remove)
@@ -70,7 +71,7 @@ class Inventory:
     def _describe_badge_effect(self, badge: dict, user_id: int) -> str:
         """Показать эффект медали с учётом hard_effect."""
         try:
-            from item_system import get_badge_effects
+            from content.effects import get_badge_effects
             stats = self.brain.db.get_extended_stats(user_id)
             eff = get_badge_effects(badge, stats)
             return describe_effect_dict(eff)
@@ -158,7 +159,7 @@ class Inventory:
         user = self.brain.db.get_user(user_id)
 
         try:
-            from item_system import get_total_effects
+            from content.effects import get_total_effects
             effects = get_total_effects(self.brain, user_id)
         except Exception:
             effects = {}
@@ -718,54 +719,79 @@ class Inventory:
 
     # ---------- ТИТУЛЫ ----------
 
-    async def cb_titles(self, query: CallbackQuery):
+    async def cb_titles(self, query: CallbackQuery, page=0):
         user_id = query.from_user.id
         u = self.brain.db.get_user(user_id)
         level = u["level"]
         current = self.brain.db.get_title(user_id)
 
+        all_titles = (
+            [("level", title) for title in LEVEL_TITLES]
+            + [("shop", title) for title in TITLES.values()]
+        )
+        total_pages = max(1, (len(all_titles) + 4) // 5)
+        page = min(max(0, page), total_pages - 1)
+        titles, _ = paginate(all_titles, page + 1, 5)
         lines = [
             "🏷 <b>Титулы — просто для красоты</b>\n",
             f"Сейчас: <b>{current}</b>\n",
             "<i>Титулы не дают бонусов. Они украшают профиль.</i>\n",
-            "🏆 <b>За уровень</b>",
         ]
         buttons = []
         unlocked_level_titles = {
             title[0] for title in level_titles_for(level)
         }
-        for key, name, required_level, rarity in LEVEL_TITLES:
-            rarity_icon = RARITY_EMOJI.get(rarity, "⚪")
-            if key in unlocked_level_titles:
-                mark = " ✅" if name == current else ""
-                buttons.append([InlineKeyboardButton(
-                    text=f"{rarity_icon} {name}{mark}",
-                    callback_data=f"inv_title_pick_{name}",
-                )])
+        section = None
+        for title_type, title in titles:
+            current_section = "🏆 <b>За уровень</b>" if title_type == "level" else "🛒 <b>Купленные</b>"
+            if current_section != section:
+                lines.extend(["", current_section])
+                section = current_section
+            if title_type == "level":
+                key, name, required_level, rarity = title
+                rarity_icon = RARITY_EMOJI.get(rarity, "⚪")
+                if key in unlocked_level_titles:
+                    mark = " ✅" if name == current else ""
+                    buttons.append([InlineKeyboardButton(
+                        text=f"{rarity_icon} {name}{mark}",
+                        callback_data=f"inv_title_pick_{name}",
+                    )])
+                else:
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🔒 {name} (с {required_level} ур.)",
+                        callback_data="locked",
+                    )])
             else:
-                buttons.append([InlineKeyboardButton(
-                    text=f"🔒 {name} (с {required_level} ур.)",
-                    callback_data="locked",
-                )])
+                owned = self.brain.db.has_item(user_id, title["shop_id"]) > 0
+                rarity_icon = RARITY_EMOJI.get(title["rarity"], "⚪")
+                if owned:
+                    mark = " ✅" if title["name"] == current else ""
+                    buttons.append([InlineKeyboardButton(
+                        text=f"{rarity_icon} {title['name']}{mark}",
+                        callback_data=f"inv_title_pick_{title['name']}",
+                    )])
+                else:
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🔒 {title['name']}",
+                        callback_data="locked",
+                    )])
 
-        lines.extend(["", "🛒 <b>Купленные</b>"])
-        for title in TITLES.values():
-            owned = self.brain.db.has_item(user_id, title["shop_id"]) > 0
-            rarity_icon = RARITY_EMOJI.get(title["rarity"], "⚪")
-            if owned:
-                mark = " ✅" if title["name"] == current else ""
-                buttons.append([InlineKeyboardButton(
-                    text=f"{rarity_icon} {title['name']}{mark}",
-                    callback_data=f"inv_title_pick_{title['name']}",
-                )])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=f"🔒 {title['name']}",
-                    callback_data="locked",
-                )])
-
+        buttons.append([
+            InlineKeyboardButton(
+                text="◀️",
+                callback_data=f"inv_titles_page_{max(0, page - 1)}",
+            ),
+            InlineKeyboardButton(
+                text=f"{page + 1}/{total_pages}",
+                callback_data=f"inv_titles_page_{page}",
+            ),
+            InlineKeyboardButton(
+                text="▶️",
+                callback_data=f"inv_titles_page_{min(total_pages - 1, page + 1)}",
+            ),
+        ])
         buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="inv")])
-        buttons.extend(nav_footer())
+        buttons.extend(nav_footer("inv"))
 
         try:
             await query.message.edit_text(
@@ -776,6 +802,13 @@ class Inventory:
         except Exception:
             pass
         await query.answer()
+
+    async def cb_titles_page(self, query: CallbackQuery):
+        try:
+            page = int(query.data.removeprefix("inv_titles_page_"))
+        except ValueError:
+            return await safe_answer(query, "Ошибка страницы.", show_alert=True)
+        await self.cb_titles(query, page=page)
 
     async def cb_title_pick(self, query: CallbackQuery):
         name = query.data.removeprefix("inv_title_pick_")
@@ -812,4 +845,8 @@ class Inventory:
 
         self.brain.db.set_title(user_id, name)
         await safe_answer(query, f"✅ Титул: {name}")
-        await self.cb_titles(query)
+        titles = [title[1] for title in LEVEL_TITLES] + [
+            title["name"] for title in TITLES.values()
+        ]
+        page = titles.index(name) // 5
+        await self.cb_titles(query, page=page)

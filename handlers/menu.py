@@ -2,11 +2,16 @@ import html
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from utils import (
     format_sc, is_current_screen, nav_footer, safe_answer, with_hero,
 )
 import time
+
+
+class DisplayNameStates(StatesGroup):
+    waiting_for_name = State()
 
 
 BUTTONS = {
@@ -21,63 +26,6 @@ BUTTONS = {
     "about":    "ℹ️ О боте",
     "settings": "⚙️ Настройки",
     "complaint": "📮 Жалоба",
-}
-
-LAYOUTS = {
-    "classic": {
-        "name": "🎰 Классика",
-        "rows": [
-            ["play"],
-            ["daily"],
-            ["casino", "shop"],
-            ["trade", "profile"],
-            ["top", "inv"],
-            ["about", "settings"],
-            ["complaint"],
-        ],
-    },
-    "compact": {
-        "name": "📦 Компакт",
-        "rows": [
-            ["play"],
-            ["daily", "casino"],
-            ["shop", "trade"],
-            ["profile", "inv"],
-            ["top", "about"],
-            ["settings", "complaint"],
-        ],
-    },
-    "social": {
-        "name": "👤 Социальный",
-        "rows": [
-            ["profile", "top"],
-            ["trade", "casino"],
-            ["play", "inv"],
-            ["shop", "about"],
-            ["settings", "complaint"],
-        ],
-    },
-    "competitive": {
-        "name": "🏆 Соревновательный",
-        "rows": [
-            ["top", "play"],
-            ["casino", "trade"],
-            ["profile", "shop"],
-            ["inv", "about"],
-            ["settings", "complaint"],
-        ],
-    },
-    "minimal": {
-        "name": "🎯 Минимал",
-        "rows": [
-            ["play"],
-            ["casino"],
-            ["profile"],
-            ["inv"],
-            ["about"],
-            ["complaint"],
-        ],
-    },
 }
 
 
@@ -130,8 +78,13 @@ class Menu:
         dp.callback_query(F.data == "cele_done")(self.cb_cele_done)
         dp.callback_query(F.data == "about")(self.cb_about)
         dp.callback_query(F.data == "settings")(self.cb_settings)
-        dp.callback_query(F.data == "set_layout_menu")(self.cb_layouts)
-        dp.callback_query(F.data.startswith("set_layout_"))(self.cb_set_layout)
+        dp.callback_query(F.data == "set_notif_toggle")(self.cb_notif_toggle)
+        dp.callback_query(F.data == "set_display_name")(self.cb_display_name_start)
+        dp.callback_query(F.data == "set_fast_anim")(self.cb_fast_anim_toggle)
+        dp.message(Command("cancel"), DisplayNameStates.waiting_for_name)(
+            self.cb_display_name_cancel
+        )
+        dp.message(DisplayNameStates.waiting_for_name)(self.on_display_name_input)
         dp.callback_query(F.data == "top_casinos")(self.cb_top_casinos)
         dp.callback_query(
             F.data.in_({f"top_{key}" for key in self.TOP_SORTS})
@@ -140,13 +93,19 @@ class Menu:
     def main_keyboard(self, user_id):
         from config import TYCOON_ENABLED
 
-        layout_key = self.brain.db.get_layout(user_id)
-        layout = LAYOUTS.get(layout_key, LAYOUTS["classic"])
         labels = dict(BUTTONS)
         if not TYCOON_ENABLED:
             labels["casino"] = "🚧 Казино (ремонт)"
         buttons = []
-        for row in layout["rows"]:
+        for row in (
+            ["play"],
+            ["daily"],
+            ["casino", "shop"],
+            ["trade", "profile"],
+            ["top", "inv"],
+            ["about", "settings"],
+            ["complaint"],
+        ):
             line = []
             for key in row:
                 if key in labels:
@@ -158,18 +117,11 @@ class Menu:
 
     def settings_keyboard(self):
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎨 Раскладка кнопок", callback_data="set_layout_menu")],
+            [InlineKeyboardButton(text="🔔 Уведомления", callback_data="set_notif_toggle")],
+            [InlineKeyboardButton(text="👤 Отображаемое имя", callback_data="set_display_name")],
+            [InlineKeyboardButton(text="⚡ Быстрая анимация", callback_data="set_fast_anim")],
             [InlineKeyboardButton(text="⬅️ Назад",            callback_data="menu")],
-        ] + nav_footer())
-
-    def layout_keyboard(self, current):
-        buttons = []
-        for key, data in LAYOUTS.items():
-            mark = " ✅" if key == current else ""
-            buttons.append([InlineKeyboardButton(text=data["name"] + mark, callback_data=f"set_layout_{key}")])
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")])
-        buttons.extend(nav_footer())
-        return InlineKeyboardMarkup(inline_keyboard=buttons)
+        ])
 
     async def _show_celebration(self, message: Message):
         """Send the one-time 1.0.0 welcome screen."""
@@ -369,7 +321,7 @@ class Menu:
 
         badges_block = ""
         try:
-            from cosmetics import BADGES
+            from content.catalog import BADGES
             equipped = self.brain.db.get_user_badges(user_id)
             names = [BADGES[bid]["name"] for bid in equipped.values() if bid and bid in BADGES]
             if names:
@@ -378,8 +330,10 @@ class Menu:
             pass
 
         title_line = f"🏷 {u['title']}\n" if u["title"] else ""
+        display_name = str(u.get("display_name") or "").strip()
+        name_line = html.escape(display_name) if display_name else f"@{html.escape(str(u['username'] or 'player'))}"
         text = (
-            f"👤 @{u['username']}\n"
+            f"👤 {name_line}\n"
             f"{title_line}"
             f"{badges_block}\n"
             f"⭐ Уровень: {u['level']} (XP: {u['xp']}/{xp_needed})\n"
@@ -593,35 +547,74 @@ class Menu:
     async def cb_settings(self, query: CallbackQuery):
         await safe_answer(query)
         user_id = query.from_user.id
-        layout_key = self.brain.db.get_layout(user_id)
-        layout_name = LAYOUTS.get(layout_key, LAYOUTS["classic"])["name"]
-        text = (
-            f"⚙️ <b>Настройки</b>\n\n"
-            f"🎨 Раскладка: {layout_name}\n\n"
-            "Выбери, что изменить:"
-        )
+        text = self.settings_text(user_id)
         try:
             await query.message.edit_text(text, reply_markup=self.settings_keyboard(), parse_mode="HTML")
         except Exception:
             pass
 
-    async def cb_layouts(self, query: CallbackQuery):
-        await safe_answer(query)
+    def settings_text(self, user_id):
+        notif_enabled = self.brain.db.get_flag(f"notif:{user_id}", "1") == "1"
+        fast_anim = self.brain.db.get_fast_anim(user_id) == 1
+        return (
+            "⚙️ <b>Настройки</b>\n\n"
+            f"🔔 Уведомления: {'включены' if notif_enabled else 'выключены'}\n"
+            f"⚡ Быстрая анимация: {'включена' if fast_anim else 'выключена'}\n\n"
+            "Выбери, что изменить:"
+        )
+
+    async def cb_notif_toggle(self, query: CallbackQuery):
         user_id = query.from_user.id
-        current = self.brain.db.get_layout(user_id)
+        flag_key = f"notif:{user_id}"
+        enabled = self.brain.db.get_flag(flag_key, "1") != "1"
+        self.brain.db.set_flag(flag_key, "1" if enabled else "0")
+        status = "включены" if enabled else "выключены"
+        await safe_answer(query, f"🔔 Уведомления {status}")
         try:
             await query.message.edit_text(
-                "🎨 <b>Выбери раскладку кнопок:</b>\n\nОна определяет, как расположены кнопки в главном меню.",
-                reply_markup=self.layout_keyboard(current),
-                parse_mode="HTML"
+                self.settings_text(user_id),
+                reply_markup=self.settings_keyboard(),
+                parse_mode="HTML",
             )
         except Exception:
             pass
 
-    async def cb_set_layout(self, query: CallbackQuery):
-        key = query.data.replace("set_layout_", "")
-        if key not in LAYOUTS:
-            return await safe_answer(query, "❌ Неизвестная раскладка", show_alert=True)
-        self.brain.db.set_layout(query.from_user.id, key)
-        await safe_answer(query, f"✅ Раскладка: {LAYOUTS[key]['name']}")
-        await self.cb_layouts(query)
+    async def cb_display_name_start(self, query: CallbackQuery, state: FSMContext):
+        await state.set_state(DisplayNameStates.waiting_for_name)
+        await safe_answer(query)
+        await query.message.answer(
+            "👤 Отправь отображаемое имя длиной от 3 до 20 символов.\n"
+            "Для отмены отправь /cancel."
+        )
+
+    async def on_display_name_input(self, message: Message, state: FSMContext):
+        name = (message.text or "").strip()
+        if not 3 <= len(name) <= 20:
+            return await message.answer(
+                "❌ Имя должно содержать от 3 до 20 символов. Попробуй ещё раз или отправь /cancel."
+            )
+        self.brain.db.set_display_name(message.from_user.id, name)
+        await state.clear()
+        await message.answer(f"✅ Отображаемое имя сохранено: {html.escape(name)}", parse_mode="HTML")
+
+    async def cb_display_name_cancel(self, message: Message, state: FSMContext):
+        await state.clear()
+        await message.answer("Изменение отображаемого имени отменено.")
+
+    async def cb_fast_anim_toggle(self, query: CallbackQuery):
+        user_id = query.from_user.id
+        enabled = self.brain.db.get_fast_anim(user_id) != 1
+        self.brain.db.set_fast_anim(user_id, int(enabled))
+        response = (
+            "✅ Быстрая анимация включена"
+            if enabled else "⚠️ Роллы будут медленнее"
+        )
+        await safe_answer(query, response, show_alert=not enabled)
+        try:
+            await query.message.edit_text(
+                self.settings_text(user_id),
+                reply_markup=self.settings_keyboard(),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass

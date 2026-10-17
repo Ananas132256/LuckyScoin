@@ -59,7 +59,7 @@ class Trade:
         dp.callback_query(F.data.startswith("trade_decline_"))(self.cb_decline)
 
     def _badge(self, badge_id):
-        from cosmetics import BADGES
+        from content.catalog import BADGES
         return BADGES.get(badge_id)
 
     def _parse_asset(self, value):
@@ -298,7 +298,7 @@ class Trade:
             fee = self._fee_for(want)
             db = self.brain.db
             conn = db.conn
-            from cosmetics import BADGES
+            from content.catalog import BADGES
 
             try:
                 # Блокируем записи, повторно проверяем активы и выполняем трейд атомарно.

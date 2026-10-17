@@ -1,7 +1,7 @@
 import sqlite3
 import unittest
 
-from db import DB
+from core.database import DB
 
 
 class DatabaseSafetyTests(unittest.TestCase):

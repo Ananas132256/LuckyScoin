@@ -1,6 +1,6 @@
 import asyncio
 import os
-from brain import Brain
+from core.brain import Brain
 
 TOKEN = "8821292537:AAHixiDjq4SzpSgIx50QKQmyUPsOsVdW-i8"
 

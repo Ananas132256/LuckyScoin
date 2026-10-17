@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock
 
-from inventory import Inventory
+from handlers.inventory import Inventory
 
 
 class FakeDB:
@@ -41,8 +41,8 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
         )()
         return inventory
 
-    async def test_titles_screen_lists_progression_and_purchase_sections(self):
-        from cosmetics import TITLES
+    async def test_titles_screen_paginates_five_titles_at_a_time(self):
+        from content.catalog import TITLES
 
         inventory = self.make_inventory(level=5, owned_items={100})
         query = FakeQuery()
@@ -56,20 +56,48 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
         callbacks = [button.callback_data for button in buttons]
         labels = [button.text for button in buttons]
         self.assertIn("🏆 <b>За уровень</b>", text)
-        self.assertIn("🛒 <b>Купленные</b>", text)
         self.assertIn("inv_title_pick_🎲 Новичок", callbacks)
         self.assertIn("inv_title_pick_🍀 Везунчик", callbacks)
-        self.assertIn("inv_title_pick_🧓 Старичок", callbacks)
         self.assertIn("🔒 💎 Богач (с 25 ур.)", labels)
-        self.assertIn("🔒 🍀 Клевер", labels)
-        self.assertTrue(all(
-            f"inv_title_pick_{title['name']}" not in callbacks
-            for key, title in TITLES.items()
-            if key != "old"
-        ))
+        self.assertEqual(sum(
+            button.callback_data.startswith("inv_title_pick_")
+            for button in buttons
+        ), 2)
         self.assertEqual(rows[-3][0].callback_data, "inv")
         self.assertEqual(rows[-2][0].callback_data, "play")
         self.assertEqual(rows[-1][0].callback_data, "menu")
+
+        page_query = FakeQuery(data="inv_titles_page_1")
+        await inventory.cb_titles_page(page_query)
+        page_text = page_query.message.edit_text.await_args.args[0]
+        page_keyboard = page_query.message.edit_text.await_args.kwargs["reply_markup"]
+        page_buttons = [
+            button
+            for row in page_keyboard.inline_keyboard
+            for button in row
+        ]
+        page_callbacks = [button.callback_data for button in page_buttons]
+        self.assertIn("🛒 <b>Купленные</b>", page_text)
+        self.assertIn("🔒 🍀 Клевер", [button.text for button in page_buttons])
+        self.assertEqual(
+            page_keyboard.inline_keyboard[-4][1].text,
+            "2/3",
+        )
+        self.assertTrue(all(
+            f"inv_title_pick_{title['name']}" not in page_callbacks
+            for key, title in TITLES.items()
+            if key != "old"
+        ))
+
+        last_page_query = FakeQuery(data="inv_titles_page_2")
+        await inventory.cb_titles_page(last_page_query)
+        last_page_keyboard = last_page_query.message.edit_text.await_args.kwargs["reply_markup"]
+        last_page_callbacks = [
+            button.callback_data
+            for row in last_page_keyboard.inline_keyboard
+            for button in row
+        ]
+        self.assertIn("inv_title_pick_🧓 Старичок", last_page_callbacks)
 
     async def test_level_title_selection_checks_level(self):
         inventory = self.make_inventory(level=4)
@@ -85,7 +113,7 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_unowned_shop_title_is_rejected_and_owned_title_equips(self):
-        from cosmetics import TITLES
+        from content.catalog import TITLES
 
         title = TITLES["clover"]
         inventory = self.make_inventory(level=0)
@@ -112,7 +140,7 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
             inventory.brain.db.selected,
             [(42, title["name"])],
         )
-        inventory.cb_titles.assert_awaited_once_with(query)
+        inventory.cb_titles.assert_awaited_once_with(query, page=1)
 
     async def test_unknown_title_is_rejected(self):
         inventory = self.make_inventory()
@@ -127,7 +155,7 @@ class InventoryTitleTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_badge_pick_rejects_level_locked_slot(self):
-        from cosmetics import BADGES
+        from content.catalog import BADGES
 
         inventory = self.make_inventory(level=5)
         inventory.brain.db.get_rooms = lambda user_id: []

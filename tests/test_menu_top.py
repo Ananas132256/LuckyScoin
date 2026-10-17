@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from config import SEASON_DURATION_DAYS
-from menu import Menu
+from handlers.menu import Menu
 
 
 class MenuTopTests(unittest.TestCase):

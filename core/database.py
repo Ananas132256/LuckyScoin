@@ -31,7 +31,7 @@ def _convert_lc_tiered(lc: int, tiers) -> int:
 
 @lru_cache(maxsize=1)
 def _purchasable_cosmetic_ids():
-    from cosmetics import BADGES, TITLES
+    from content.catalog import BADGES, TITLES
 
     return frozenset(
         cosmetic["shop_id"]
@@ -349,6 +349,9 @@ class DB:
             "total_won":       "INTEGER DEFAULT 0",
             "total_lost":      "INTEGER DEFAULT 0",
             "overheat_score":  "INTEGER DEFAULT 0",
+            "saved_overheat_score": "INTEGER DEFAULT 0",
+            "display_name":    "TEXT DEFAULT ''",
+            "fast_anim":       "INTEGER DEFAULT 1",
             "last_spin_ts":    "INTEGER DEFAULT 0",
             "last_screen":     "TEXT DEFAULT ''",
             "last_screen_ts":  "INTEGER DEFAULT 0",
@@ -505,7 +508,7 @@ class DB:
                 (item_id, name)
             )
 
-        from cosmetics import ITEMS, BADGES, TITLES
+        from content.catalog import ITEMS, BADGES, TITLES
         legacy_badge_destinations = {
             "☘️ Трёхлистный клевер": ITEMS["three_leaf_clover"]["shop_id"],
             "🍀 Четырёхлистный клевер": ITEMS["four_leaf_clover"]["shop_id"],
@@ -693,6 +696,7 @@ class DB:
             "username": None, "sc": 0.0, "lc": 25,
             "wins": 0, "losses": 0, "games": 0,
             "level": 0, "xp": 0, "layout": "classic", "title": "🎲 Новичок",
+            "display_name": "", "fast_anim": 1,
             "streak": 0, "max_streak": 0, "total_bets": 0,
             "total_won": 0, "total_lost": 0,
             "overheat_score": 0, "last_spin_ts": 0,
@@ -770,7 +774,7 @@ class DB:
         cur = self.conn.execute(
             "SELECT username, sc, lc, wins, losses, games, level, xp, layout, title, "
             "streak, max_streak, total_bets, total_won, total_lost, "
-            "overheat_score, last_spin_ts "
+            "overheat_score, last_spin_ts, display_name, fast_anim "
             "FROM users WHERE user_id=?",
             (user_id,)
         )
@@ -779,11 +783,12 @@ class DB:
             return self._default_user_dict()
         (username, sc, lc, wins, losses, games, level, xp, layout, title,
          streak, max_streak, total_bets, total_won, total_lost,
-         overheat_score, last_spin_ts) = row
+         overheat_score, last_spin_ts, display_name, fast_anim) = row
         return {
             "username": username, "sc": round(float(sc or 0), 2), "lc": lc,
             "wins": wins, "losses": losses, "games": games,
             "level": level, "xp": xp, "layout": layout, "title": title,
+            "display_name": display_name or "", "fast_anim": fast_anim if fast_anim is not None else 1,
             "streak": streak or 0, "max_streak": max_streak or 0,
             "total_bets": total_bets or 0,
             "total_won": total_won or 0,
@@ -901,6 +906,54 @@ class DB:
         self.conn.commit()
 
     # ================= НАСТРОЙКИ =================
+
+    def get_display_name(self, user_id):
+        row = self.conn.execute(
+            "SELECT display_name FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        return (row[0] if row else None) or ""
+
+    def set_display_name(self, user_id, name):
+        self._ensure(user_id)
+        self.conn.execute(
+            "UPDATE users SET display_name=? WHERE user_id=?",
+            (name, user_id),
+        )
+        self.conn.commit()
+
+    def get_fast_anim(self, user_id):
+        row = self.conn.execute(
+            "SELECT fast_anim FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        return row[0] if row and row[0] is not None else 1
+
+    def set_fast_anim(self, user_id, val):
+        val = int(val)
+        if val not in (0, 1):
+            raise ValueError("fast_anim must be 0 or 1")
+        self._ensure(user_id)
+        self.conn.execute(
+            "UPDATE users SET fast_anim=? WHERE user_id=?",
+            (val, user_id),
+        )
+        self.conn.commit()
+
+    def get_overheat_score(self, user_id):
+        row = self.conn.execute(
+            "SELECT saved_overheat_score FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        return row[0] if row else 0
+
+    def set_overheat_score(self, user_id, val):
+        self._ensure(user_id)
+        self.conn.execute(
+            "UPDATE users SET saved_overheat_score=? WHERE user_id=?",
+            (int(val), user_id),
+        )
+        self.conn.commit()
 
     def get_layout(self, user_id):
         cur = self.conn.execute("SELECT layout FROM users WHERE user_id=?", (user_id,))
@@ -1185,7 +1238,7 @@ class DB:
             self.conn.commit()
             return None
 
-        from item import ITEMS
+        from content.item import ITEMS
         definition = next(
             (value for value in ITEMS.values() if value["shop_id"] == item_id),
             None
@@ -1219,6 +1272,12 @@ class DB:
         return f"💔 <b>{name}</b> закончился."
 
     def get_shop_items(self):
+        from config import (
+            HALLOWEEN_END, HALLOWEEN_JACK_END, HALLOWEEN_START,
+        )
+        from content.catalog import BADGES, TITLES
+        from utils import in_date_range
+
         now = int(time.time())
         cur = self.conn.execute("SELECT next_refresh FROM shop_meta WHERE id=1")
         next_refresh = cur.fetchone()[0]
@@ -1264,6 +1323,30 @@ class DB:
             row for row in cur.fetchall()
             if row[4] not in ("badge", "title")
             or row[0] in purchasable_cosmetics
+        ]
+        now_date = datetime.now().date()
+        halloween_active = in_date_range(
+            HALLOWEEN_START, HALLOWEEN_END, now_date
+        )
+        jack_active = in_date_range(
+            HALLOWEEN_START, HALLOWEEN_JACK_END, now_date
+        )
+        seasonal_ids = {
+            cosmetic["shop_id"]: key
+            for cosmetics in (BADGES, TITLES)
+            for key, cosmetic in cosmetics.items()
+            if cosmetic.get("halloween")
+        }
+        rows = [
+            row for row in rows
+            if row[0] not in seasonal_ids
+            or (
+                halloween_active
+                and (
+                    seasonal_ids[row[0]] != "halloween_jack"
+                    or jack_active
+                )
+            )
         ]
         badge_rows = [row for row in rows if row[4] == "badge"]
         random.shuffle(badge_rows)
@@ -1662,7 +1745,7 @@ class DB:
 
     def get_all_owned_badges(self, user_id):
         """Возвращает медали игрока из слотов и инвентаря без повторов."""
-        from cosmetics import BADGES
+        from content.catalog import BADGES
 
         equipped = self.get_user_badges_full(user_id)
         slot_by_badge = {}
@@ -1684,7 +1767,7 @@ class DB:
 
     def transfer_badge(self, from_id, to_id, badge_id, from_slot=None):
         """Передаёт одну медаль в инвентарь получателя."""
-        from cosmetics import BADGES
+        from content.catalog import BADGES
 
         badge = BADGES.get(badge_id)
         if not badge or not badge.get("shop_id"):
@@ -1807,7 +1890,7 @@ class DB:
         return cur.fetchone() is not None
 
     def set_user_badge(self, user_id, slot, badge_id):
-        from cosmetics import BADGES
+        from content.catalog import BADGES
         badge = BADGES.get(badge_id)
         hp = badge.get("hp", 1) if badge else 1
         if hp == "inf":
@@ -1912,7 +1995,7 @@ class DB:
 
     def get_active_effects(self, user_id):
         try:
-            from item_system import get_total_effects
+            from content.effects import get_total_effects
             return get_total_effects(self, user_id)
         except Exception:
             return {}
@@ -1929,7 +2012,7 @@ class DB:
         winrate = (u["wins"] / u["games"]) if u["games"] > 0 else 0.0
 
         try:
-            from cosmetics import BADGES
+            from content.catalog import BADGES
             legendary = sum(
                 1 for bid in equipped_badges.values()
                 if bid and bid in BADGES and BADGES[bid].get("rarity") == "legendary"
@@ -2367,7 +2450,7 @@ class DB:
         return cur.fetchall()
 
     def get_ignored_content(self, days=7):
-        from cosmetics import BADGES
+        from content.catalog import BADGES
 
         cutoff = int(time.time()) - days * 86400
         purchased = {

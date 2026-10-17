@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from daily import Daily
+from handlers.daily import Daily
 
 
 class FakeDB:
@@ -75,9 +75,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
     async def test_claim_awards_lc_and_records_seventh_day_wheel(self):
         self.db.state["streak"] = 6
 
-        with patch("daily.time.time", return_value=100_000), patch(
-            "daily.random.random", return_value=0.99
-        ), patch("daily.asyncio.sleep", new=AsyncMock()):
+        with patch("handlers.daily.time.time", return_value=100_000), patch(
+            "handlers.daily.random.random", return_value=0.99
+        ), patch("handlers.daily.asyncio.sleep", new=AsyncMock()):
             await self.daily.cb_claim(self.query)
 
         self.assertEqual(self.db.claims, [(42, 7)])
@@ -118,9 +118,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
             "lc_amount": 100,
         }
 
-        with patch("daily.time.time", return_value=100_000), patch(
-            "daily.random.choices", return_value=[prize]
-        ), patch("daily.asyncio.sleep", new=AsyncMock()):
+        with patch("handlers.daily.time.time", return_value=100_000), patch(
+            "handlers.daily.random.choices", return_value=[prize]
+        ), patch("handlers.daily.asyncio.sleep", new=AsyncMock()):
             await self.daily.cb_wheel_spin(self.query)
 
         self.assertEqual(self.db.flags["daily_wheel_until:42"], "0")
@@ -137,7 +137,7 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
     async def test_expired_wheel_grant_is_rejected(self):
         self.db.flags["daily_wheel_until:42"] = "100000"
 
-        with patch("daily.time.time", return_value=100_000):
+        with patch("handlers.daily.time.time", return_value=100_000):
             await self.daily.cb_wheel_spin(self.query)
 
         self.assertEqual(self.db.balances, [])
@@ -150,9 +150,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
     async def test_missed_streak_resets_to_day_one(self):
         self.db.state.update(streak=6, streak_lost=True)
 
-        with patch("daily.time.time", return_value=100_000), patch(
-            "daily.random.random", return_value=0.99
-        ), patch("daily.asyncio.sleep", new=AsyncMock()):
+        with patch("handlers.daily.time.time", return_value=100_000), patch(
+            "handlers.daily.random.random", return_value=0.99
+        ), patch("handlers.daily.asyncio.sleep", new=AsyncMock()):
             await self.daily.cb_claim(self.query)
 
         self.assertEqual(self.db.claims, [(42, 1)])
@@ -166,9 +166,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.db.state["streak"] = 2
         self.db.state["wheel_ts"] = 100_000 - 12 * 3600
 
-        with patch("daily.time.time", return_value=100_000), patch(
-            "daily.random.random", return_value=0.14
-        ), patch("daily.asyncio.sleep", new=AsyncMock()):
+        with patch("handlers.daily.time.time", return_value=100_000), patch(
+            "handlers.daily.random.random", return_value=0.14
+        ), patch("handlers.daily.asyncio.sleep", new=AsyncMock()):
             await self.daily.cb_claim(self.query)
 
         self.assertEqual(self.db.claims, [(42, 3)])
@@ -178,9 +178,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.db.state["streak"] = 2
         self.db.state["wheel_ts"] = 100_000 - 12 * 3600 + 1
 
-        with patch("daily.time.time", return_value=100_000), patch(
-            "daily.random.random", return_value=0.01
-        ), patch("daily.asyncio.sleep", new=AsyncMock()):
+        with patch("handlers.daily.time.time", return_value=100_000), patch(
+            "handlers.daily.random.random", return_value=0.01
+        ), patch("handlers.daily.asyncio.sleep", new=AsyncMock()):
             await self.daily.cb_claim(self.query)
 
         self.assertEqual(self.db.flags["daily_wheel_until:42"], "0")
