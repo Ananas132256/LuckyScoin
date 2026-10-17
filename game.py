@@ -71,7 +71,7 @@ class Game:
     #  НАСТРОЙКИ
     # ============================================================
     LEVEL_REQ = {
-        "common": 0, "uncommon": 8, "rare": 16, "ultra": 50, "epic": 100,
+        "common": 0, "uncommon": 5, "rare": 25, "ultra": 50, "epic": 100,
         "advanced": 12,
     }
     STICKY_CHANCE = 0.15
@@ -111,20 +111,20 @@ class Game:
         "common":   ("Обычная",       1,     5,         1),
         "uncommon": ("Необычная",     6,     250,       2),
         "rare":     ("Редкая",        250,   1000,      5),
-        "ultra":    ("Ультраредкая",  1000,  10000,     15),
-        "epic":     ("Эпическая",     10000, 1000000,   50),
+        "ultra":    ("Ультраредкая",  1000,  10000,     10),
+        "epic":     ("Эпическая",     10000, 1000000,   15),
         "advanced": ("Продвинутое",  100,   5000,       1.5),
     }
 
     SPIN_ANIM = {
-        "common":   {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.05, "last_stop_delay": 2.00, "label": "▶️"},
-        "uncommon": {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.10, "last_stop_delay": 2.20, "label": "⚡"},
-        "rare":     {"spin_frames": 3, "spin_delay": 1.05, "stop_delay": 1.20, "last_stop_delay": 2.40, "label": "💫"},
-        "ultra":    {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.30, "last_stop_delay": 2.60, "label": "🔥"},
-        "epic":     {"spin_frames": 4, "spin_delay": 1.05, "stop_delay": 1.50, "last_stop_delay": 3.00, "label": "👾"},
+        "common":   {"spin_frames": 3, "spin_delay": 0.1, "stop_delay": 0.1, "last_stop_delay": 0.10, "label": "▶️"},
+        "uncommon": {"spin_frames": 3, "spin_delay": 0.1, "stop_delay": 0.1, "last_stop_delay": 0.1, "label": "⚡"},
+        "rare":     {"spin_frames": 3, "spin_delay": 0.1, "stop_delay": 0.1, "last_stop_delay": 0.1, "label": "💫"},
+        "ultra":    {"spin_frames": 3, "spin_delay": 0.1, "stop_delay": 0.1, "last_stop_delay": 0.1, "label": "🔥"},
+        "epic":     {"spin_frames": 3, "spin_delay": 0.1, "stop_delay": 0.1, "last_stop_delay": 0.1, "label": "👾"},
         "advanced": {
-            "spin_frames": 3, "spin_delay": 1.10, "stop_delay": 1.10,
-            "last_stop_delay": 1.20, "label": "🎰",
+            "spin_frames": 5, "spin_delay": 0.1, "stop_delay": 0.1,
+            "last_stop_delay": 0.1, "label": "🎰",
         },
     }
 
