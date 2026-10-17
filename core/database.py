@@ -2496,6 +2496,19 @@ class DB:
         )
         self.conn.commit()
 
+    def get_exchange_rate(self, direction: str) -> float:
+        key = f"exchange_rate_{direction}"
+        default = 1000 if direction == "lc_to_sc" else 950
+        try:
+            return max(0.01, float(self.get_flag(key, default)))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def set_exchange_rate(self, direction: str, value: float):
+        if direction not in ("lc_to_sc", "sc_to_lc"):
+            raise ValueError("direction")
+        self.set_flag(f"exchange_rate_{direction}", round(float(value), 4))
+
     def get_current_season(self) -> int:
         return int(self.get_flag("season_current", 1))
 

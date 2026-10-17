@@ -2,7 +2,11 @@ import html
 import time
 import math
 from aiogram import Dispatcher, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message,
+)
 from content.catalog import BADGES, RARITY_EMOJI, TITLES, describe_effect_dict
 from utils import format_sc, is_current_screen, nav_footer, safe_answer, with_hero
 
@@ -12,6 +16,10 @@ CATEGORY_NAMES = {
     "title": "🏷 Титулы",
     "badge": "🎖 Медали",
 }
+
+
+class ExchangeStates(StatesGroup):
+    waiting_amount = State()
 
 
 def _format_time_left(seconds):
@@ -37,8 +45,16 @@ class Shop:
         dp.callback_query(F.data.startswith("shop_buy_confirm_"))(self.cb_buy_confirm)
         dp.callback_query(F.data.startswith("shop_buy_"))(self.cb_buy_preview)
         dp.callback_query(F.data == "shop_exchange")(self.cb_exchange_menu)
-        dp.callback_query(F.data == "shop_exchange_lc")(self.cb_exchange_lc)
-        dp.callback_query(F.data == "shop_exchange_sc")(self.cb_exchange_sc)
+        dp.callback_query(F.data == "shop_exchange_lc")(
+            self.cb_exchange_lc_start
+        )
+        dp.callback_query(F.data == "shop_exchange_sc")(
+            self.cb_exchange_sc_start
+        )
+        dp.callback_query(F.data == "shop_exchange_cancel")(
+            self.cb_exchange_cancel
+        )
+        dp.message(ExchangeStates.waiting_amount)(self.on_exchange_amount)
         dp.callback_query(F.data == "claim_old_title")(self.cb_claim_old)
 
     def main_kb(self, items, gift_active=False):
@@ -316,13 +332,15 @@ class Shop:
 
     async def cb_exchange_menu(self, query: CallbackQuery, answer_query=True):
         user_id = query.from_user.id
+        lc_to_sc = self.brain.db.get_exchange_rate("lc_to_sc")
+        sc_to_lc = self.brain.db.get_exchange_rate("sc_to_lc")
         text = (
             "💱 <b>Обмен валют</b>\n\n"
             f"💰 SC: <b>{format_sc(self.brain.db.get_balance(user_id, 'sc'))}</b>\n"
             f"🍀 LC: <b>{format_sc(self.brain.db.get_balance(user_id, 'lc'))}</b>\n\n"
-            "LC → SC: комиссия 10%, минимум 1 000 LC.\n"
-            "SC → LC: комиссия 5%, минимум 1 SC.\n"
-            "⏳ Между обменами действует задержка 60 секунд."
+            f"Курс LC → SC: <b>{format_sc(lc_to_sc)} LC = 1 SC</b>\n"
+            f"Курс SC → LC: <b>1 SC = {format_sc(sc_to_lc)} LC</b>\n\n"
+            "Выбери направление:"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💱 LC → SC", callback_data="shop_exchange_lc")],
@@ -340,53 +358,115 @@ class Shop:
             return None, math.ceil(cooldown_until - now)
         return now, 0
 
-    async def cb_exchange_lc(self, query: CallbackQuery):
+    async def _start_exchange(self, query, state, direction):
         user_id = query.from_user.id
         now, remaining = self._exchange_ready(user_id)
         if now is None:
             return await safe_answer(
                 query, f"⏳ Повтори обмен через {remaining} сек.", show_alert=True
             )
-        lc = self.brain.db.get_balance(user_id, "lc")
-        if lc < 1000:
-            return await safe_answer(query, "Нужно минимум 1000 LC.", show_alert=True)
-        lc_spent = (lc // 1000) * 1000
-        sc_gained = round((lc_spent // 1000) * 0.9, 2)
-        if not self.brain.db.subtract_balance_if_available(user_id, "lc", lc_spent):
-            return await safe_answer(query, "❌ Не удалось списать LC.", show_alert=True)
-        self.brain.db.add_balance(user_id, "sc", sc_gained)
-        self.brain.db.log_event(user_id, "", "exchange", f"{lc_spent}|{format_sc(sc_gained)}")
-        self._exchange_cooldowns[user_id] = now + 60
-        await safe_answer(
-            query,
-            f"💱 Списано {lc_spent:,} LC (комиссия 10%) → +{format_sc(sc_gained)} SC".replace(",", " "),
-            show_alert=True,
+        rate = self.brain.db.get_exchange_rate(direction)
+        if rate <= 0:
+            return await safe_answer(query, "❌ Курс обмена недоступен.", show_alert=True)
+        await state.set_state(ExchangeStates.waiting_amount)
+        await state.update_data(direction=direction)
+        currency = "LC" if direction == "lc_to_sc" else "SC"
+        balance = self.brain.db.get_balance(user_id, currency.lower())
+        rate_text = (
+            f"{format_sc(rate)} LC за 1 SC"
+            if direction == "lc_to_sc"
+            else f"1 SC за {format_sc(rate)} LC"
         )
-        await self.cb_exchange_menu(query, answer_query=False)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="shop_exchange_cancel",
+            )
+        ]])
+        await query.message.edit_text(
+            f"💱 <b>Обмен валют</b>\n\n"
+            f"Баланс: <b>{format_sc(balance)} {currency}</b>\n"
+            f"Курс: <b>{rate_text}</b>\n\n"
+            f"Введи количество {currency} для обмена. /cancel — отмена.",
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        await safe_answer(query)
 
-    async def cb_exchange_sc(self, query: CallbackQuery):
-        user_id = query.from_user.id
-        now, remaining = self._exchange_ready(user_id)
-        if now is None:
-            return await safe_answer(
-                query, f"⏳ Повтори обмен через {remaining} сек.", show_alert=True
+    async def cb_exchange_lc_start(self, query: CallbackQuery, state: FSMContext):
+        return await self._start_exchange(query, state, "lc_to_sc")
+
+    async def cb_exchange_sc_start(self, query: CallbackQuery, state: FSMContext):
+        return await self._start_exchange(query, state, "sc_to_lc")
+
+    async def on_exchange_amount(self, message: Message, state: FSMContext):
+        text = (message.text or "").strip()
+        if text.lower() == "/cancel":
+            await state.clear()
+            return await message.answer("Отменено.")
+        try:
+            amount = float(text.replace(",", "."))
+        except ValueError:
+            return await message.answer("Введи число.")
+        if not math.isfinite(amount):
+            return await message.answer("Введи число.")
+        if amount <= 0:
+            return await message.answer("Сумма должна быть > 0.")
+
+        data = await state.get_data()
+        direction = data.get("direction")
+        if direction not in ("lc_to_sc", "sc_to_lc"):
+            await state.clear()
+            return await message.answer("❌ Направление обмена потеряно. Начни заново.")
+
+        user_id = message.from_user.id
+        db = self.brain.db
+        rate = db.get_exchange_rate(direction)
+        if rate <= 0:
+            return await message.answer("❌ Курс обмена недоступен.")
+
+        if direction == "lc_to_sc":
+            if amount < rate:
+                return await message.answer(
+                    f"Минимум {format_sc(rate)} LC (= 1 SC)."
+                )
+            if db.get_balance(user_id, "lc") < amount:
+                return await message.answer("Недостаточно LC.")
+            if not db.subtract_balance_if_available(user_id, "lc", amount):
+                return await message.answer("Недостаточно LC.")
+            sc_gain = round(amount / rate, 2)
+            db.add_balance(user_id, "sc", sc_gain)
+            db.log_event(
+                user_id, "", "exchange", f"lc_to_sc|{amount:g}|{sc_gain:g}"
             )
-        sc = self.brain.db.get_balance(user_id, "sc")
-        if sc < 1:
-            return await safe_answer(query, "Нужно минимум 1 SC.", show_alert=True)
-        sc_spent = math.floor(sc)
-        lc_gained = sc_spent * 950
-        if not self.brain.db.subtract_balance_if_available(user_id, "sc", sc_spent):
-            return await safe_answer(query, "❌ Не удалось списать SC.", show_alert=True)
-        self.brain.db.add_balance(user_id, "lc", lc_gained)
-        self.brain.db.log_event(user_id, "", "exchange", f"{format_sc(sc_spent)}|{lc_gained}")
-        self._exchange_cooldowns[user_id] = now + 60
-        await safe_answer(
-            query,
-            f"💱 Списано {format_sc(sc_spent)} SC (комиссия 5%) → +{lc_gained:,} LC".replace(",", " "),
-            show_alert=True,
-        )
+            await message.answer(
+                f"💱 {amount:g} LC → <b>+{sc_gain:g} SC</b> "
+                f"(курс {format_sc(rate)})",
+                parse_mode="HTML",
+            )
+        else:
+            if db.get_balance(user_id, "sc") < amount:
+                return await message.answer("Недостаточно SC.")
+            if not db.subtract_balance_if_available(user_id, "sc", amount):
+                return await message.answer("Недостаточно SC.")
+            lc_gain = int(round(amount * rate, 2))
+            db.add_balance(user_id, "lc", lc_gain)
+            db.log_event(
+                user_id, "", "exchange", f"sc_to_lc|{amount:g}|{lc_gain}"
+            )
+            await message.answer(
+                f"💱 {amount:g} SC → <b>+{lc_gain} LC</b> "
+                f"(курс {format_sc(rate)})",
+                parse_mode="HTML",
+            )
+
+        self._exchange_cooldowns[user_id] = time.time() + 60
+        await state.clear()
+
+    async def cb_exchange_cancel(self, query: CallbackQuery, state: FSMContext):
+        await state.clear()
         await self.cb_exchange_menu(query, answer_query=False)
+        await safe_answer(query)
 
     async def cb_claim_old(self, query: CallbackQuery):
         import time as _t

@@ -2,7 +2,8 @@ import asyncio
 import os
 from core.brain import Brain
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+
 
 async def main():
     if not TOKEN:

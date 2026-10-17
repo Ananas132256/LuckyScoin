@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 import os
 import asyncio
 import html
+import math
 import time
 from decimal import Decimal, InvalidOperation
 from aiogram.fsm.state import State, StatesGroup
@@ -111,6 +112,7 @@ class Admin:
         dp.message(Command("setbalance"))(self.cmd_setbalance)
         dp.message(Command("setlevel"))(self.cmd_setlevel)
         dp.message(Command("setxp"))(self.cmd_setxp)
+        dp.message(Command("setrate"))(self.cmd_setrate)
         dp.message(Command("userinfo"))(self.cmd_userinfo)
 
         # медали
@@ -182,6 +184,39 @@ class Admin:
         cmd = parts[0].lstrip("/") if parts else "?"
         args = parts[1] if len(parts) > 1 else ""
         self.brain.db.log_admin(message.from_user.id, cmd, args)
+
+    async def cmd_setrate(self, message: Message):
+        if not is_static_admin(message.from_user.id):
+            return await message.answer("⛔ Только статичный админ.")
+        parts = (message.text or "").split()
+        if len(parts) != 3:
+            return await message.answer(
+                "Использование:\n"
+                "<code>/setrate lc_to_sc &lt;LC за 1 SC&gt;</code>\n"
+                "<code>/setrate sc_to_lc &lt;LC за 1 SC&gt;</code>",
+                parse_mode="HTML",
+            )
+        direction = parts[1].lower()
+        if direction not in ("lc_to_sc", "sc_to_lc"):
+            return await message.answer(
+                "Направление: lc_to_sc или sc_to_lc."
+            )
+        try:
+            value = float(parts[2].replace(",", "."))
+        except ValueError:
+            return await message.answer("Введи число.")
+        if not math.isfinite(value):
+            return await message.answer("Введи число.")
+        if value <= 0:
+            return await message.answer("Курс должен быть > 0.")
+        self.brain.db.set_exchange_rate(direction, value)
+        self.brain.db.log_admin(
+            message.from_user.id, "setrate", f"{direction}={value}"
+        )
+        await message.answer(
+            f"✅ Курс <b>{direction}</b> = <b>{value:g}</b>",
+            parse_mode="HTML",
+        )
 
     # ---------- УНИВЕРСАЛЬНЫЙ ПОИСК ЮЗЕРА ----------
 
