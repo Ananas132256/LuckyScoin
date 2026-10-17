@@ -57,7 +57,7 @@ class Game:
         "rare": 25, "ultra": 50, "epic": 100,
         "advanced": 12, "hardcore": 65,
     }
-    STICKY_CHANCE = 0.25
+    STICKY_CHANCE = 0.20
     MAX_REROLLS = 100
     # Вес выпадения значка по редкости: чем реже значок, тем ниже шанс.
     ITEM_RARITY_WEIGHTS = {
