@@ -18,8 +18,7 @@ from utils import format_number, format_sc
 #  СТАТИЧНЫЕ АДМИНЫ (из переменной окружения) — снять нельзя
 # ============================================================
 ADMIN_IDS = [
-    5364546094,
-    5998092433,
+    int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()
 ]
 
 EVENT_STYLE = {
